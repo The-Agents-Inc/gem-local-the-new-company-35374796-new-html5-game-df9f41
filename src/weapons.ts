@@ -1,6 +1,6 @@
 import { Container, Graphics } from "pixi.js";
 import { Pool } from "./pool";
-import { Enemy, Projectile } from "./entities";
+import { Enemy } from "./entities";
 
 // ---------------------------------------------------------------------------
 // Weapon types
@@ -95,7 +95,7 @@ export class WeaponInstance {
 // Orbital orb entity
 // ---------------------------------------------------------------------------
 export class OrbitalOrb extends Container {
-  angle = 0;
+  orbAngle = 0;
   damage = 8;
   radius = 8;
   orbRadius = 60;
@@ -209,11 +209,9 @@ export class WeaponManager {
   weapons: WeaponInstance[] = [];
   orbs: OrbitalOrb[] = [];
   private orbPool: Pool<OrbitalOrb>;
-  private world: Container;
   private deps: WeaponManagerDeps;
 
   constructor(world: Container, deps: WeaponManagerDeps) {
-    this.world = world;
     this.deps = deps;
     this.orbPool = new Pool(
       () => {
@@ -268,8 +266,6 @@ export class WeaponManager {
     for (const weapon of this.weapons) {
       weapon.cooldownTimer -= dt;
       if (weapon.cooldownTimer > 0) continue;
-
-      const stats = weapon.stats;
 
       switch (weapon.type) {
         case WeaponType.PlasmaBolt:
@@ -391,9 +387,9 @@ export class WeaponManager {
 
   private updateOrbs(dt: number, pos: { x: number; y: number }, enemies: Enemy[]) {
     for (const orb of this.orbs) {
-      orb.angle += orb.rotSpeed * dt;
-      orb.x = pos.x + Math.cos(orb.angle) * orb.orbRadius;
-      orb.y = pos.y + Math.sin(orb.angle) * orb.orbRadius;
+      orb.orbAngle += orb.rotSpeed * dt;
+      orb.x = pos.x + Math.cos(orb.orbAngle) * orb.orbRadius;
+      orb.y = pos.y + Math.sin(orb.orbAngle) * orb.orbRadius;
 
       // Reduce hit cooldowns
       for (const [enemy, t] of orb.hitCooldowns) {
