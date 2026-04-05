@@ -1,6 +1,7 @@
 import { Container, Graphics, Text, TextStyle } from "pixi.js";
 import { WeaponType, WEAPON_NAMES, WEAPON_COLORS, WEAPON_DEFS } from "./weapons";
-import { SaveData, ALL_UPGRADES, getUpgradeTier, canAfford, purchaseUpgrade } from "./upgrades";
+import { ALL_UPGRADES, canAffordUpgrade, purchaseUpgrade } from "./upgrades";
+import { SaveManager } from "./save";
 
 const STYLE = new TextStyle({
   fontFamily: "monospace",
@@ -395,16 +396,16 @@ const UPGRADE_DESC_STYLE = new TextStyle({
 });
 
 export class UpgradeShopScreen extends Container {
-  private save: SaveData;
+  private saveMgr: SaveManager;
   private goldDisplay!: Text;
   private cardContainer!: Container;
   private onClose: (() => void) | null = null;
   private screenW: number;
   private screenH: number;
 
-  constructor(save: SaveData, screenWidth: number, screenHeight: number, onCloseCallback: () => void) {
+  constructor(saveMgr: SaveManager, screenWidth: number, screenHeight: number, onCloseCallback: () => void) {
     super();
-    this.save = save;
+    this.saveMgr = saveMgr;
     this.onClose = onCloseCallback;
     this.screenW = screenWidth;
     this.screenH = screenHeight;
@@ -422,7 +423,7 @@ export class UpgradeShopScreen extends Container {
     this.addChild(title);
 
     // Gold
-    this.goldDisplay = new Text({ text: `Gold: ${save.gold}`, style: SHOP_GOLD_STYLE });
+    this.goldDisplay = new Text({ text: `Gold: ${saveMgr.save.gold}`, style: SHOP_GOLD_STYLE });
     this.goldDisplay.anchor.set(0.5, 0);
     this.goldDisplay.position.set(screenWidth / 2, 75);
     this.addChild(this.goldDisplay);
@@ -484,9 +485,9 @@ export class UpgradeShopScreen extends Container {
     const card = new Container();
     card.position.set(x, y);
 
-    const tier = getUpgradeTier(this.save, def.id);
+    const tier = this.saveMgr.getUpgradeTier(def.id);
     const maxed = tier >= def.maxTier;
-    const affordable = canAfford(this.save, def.id);
+    const affordable = canAffordUpgrade(this.saveMgr, def.id);
 
     // Background
     const borderColor = maxed ? 0x444444 : (affordable ? def.color : 0x333333);
@@ -564,8 +565,8 @@ export class UpgradeShopScreen extends Container {
         buyBtn.on("pointerover", () => { btnBg.tint = 0xcccccc; });
         buyBtn.on("pointerout", () => { btnBg.tint = 0xffffff; });
         buyBtn.on("pointerdown", () => {
-          purchaseUpgrade(this.save, def.id);
-          this.goldDisplay.text = `Gold: ${this.save.gold}`;
+          purchaseUpgrade(this.saveMgr, def.id);
+          this.goldDisplay.text = `Gold: ${this.saveMgr.save.gold}`;
           this.rebuildCards();
         });
       }

@@ -2,10 +2,10 @@ import { Application, Container } from "pixi.js";
 import { Keyboard } from "./input";
 import { Pool } from "./pool";
 import { Player, Enemy, Projectile, DamageNumber, XpGem } from "./entities";
-import { HUD, GameOverScreen, LevelUpScreen, WeaponChoice } from "./hud";
+import { HUD, GameOverScreen, LevelUpScreen, WeaponChoice, UpgradeShopScreen } from "./hud";
 import { WeaponManager, WeaponType, FlameZone, LightningEffect } from "./weapons";
 import { SaveManager } from "./save";
-import { goldPerKill } from "./upgrades";
+import { goldPerKill, getUpgradeBonus, UpgradeId } from "./upgrades";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -62,6 +62,7 @@ export class Game {
   private hud: HUD;
   private gameOverScreen: GameOverScreen | null = null;
   private levelUpScreen: LevelUpScreen | null = null;
+  private upgradeShopScreen: UpgradeShopScreen | null = null;
 
   // Persistence
   private saveMgr: SaveManager;
@@ -141,11 +142,12 @@ export class Game {
       getPlayerPos: () => ({ x: this.player.x, y: this.player.y }),
       getEnemies: () => this.enemies,
       spawnProjectile: (x, y, vx, vy, damage, _color) => {
+        const dmgMult = 1 + getUpgradeBonus(this.saveMgr, UpgradeId.WeaponDamage) / 100;
         const p = this.projPool.get();
         p.position.set(x, y);
         p.vx = vx;
         p.vy = vy;
-        p.damage = damage;
+        p.damage = Math.round(damage * dmgMult);
         p.rotation = Math.atan2(vy, vx);
         this.projectiles.push(p);
       },
@@ -160,9 +162,11 @@ export class Game {
         this.lightningEffects.push(l);
       },
       damageEnemy: (enemy, damage) => {
-        enemy.hp -= damage;
+        const dmgMult = 1 + getUpgradeBonus(this.saveMgr, UpgradeId.WeaponDamage) / 100;
+        const finalDmg = Math.round(damage * dmgMult);
+        enemy.hp -= finalDmg;
         enemy.flashDamage();
-        this.spawnDmgNumber(damage, enemy.x, enemy.y - 15);
+        this.spawnDmgNumber(finalDmg, enemy.x, enemy.y - 15);
         if (enemy.hp <= 0) {
           const idx = this.enemies.indexOf(enemy);
           if (idx >= 0) this.killEnemy(idx);
@@ -350,7 +354,8 @@ export class Game {
           e.radius,
         )
       ) {
-        this.player.hp -= e.damage;
+        const armorReduction = 1 - getUpgradeBonus(this.saveMgr, UpgradeId.Armor) / 100;
+        this.player.hp -= Math.max(1, Math.round(e.damage * armorReduction));
         this.player.invulnTimer = 0.3;
         this.player.drawHpBar();
         this.player.flashDamage();
@@ -416,7 +421,8 @@ export class Game {
 
       // Collect if very close
       if (d2 < 20 * 20) {
-        const levelsGained = this.player.addXp(g.xpValue);
+        const xpMultiplier = 1 + getUpgradeBonus(this.saveMgr, UpgradeId.XpGain) / 100;
+        const levelsGained = this.player.addXp(Math.round(g.xpValue * xpMultiplier));
         if (levelsGained > 0) {
           this.pendingLevelUps += levelsGained;
           this.showLevelUpScreen();
@@ -547,7 +553,13 @@ export class Game {
     this.saveMgr.recordRun(this.kills, this.elapsed, this.player.level, weaponNames, this.runGold);
 
     const save = this.saveMgr.save;
-    this.gameOverScreen = new GameOverScreen(this.kills, this.elapsed, save.gold, save.bestKills, save.totalRuns);
+    this.gameOverScreen = new GameOverScreen(
+      this.kills,
+      this.elapsed,
+      this.runGold,
+      save.gold,
+      () => this.openUpgradeShop(),
+    );
     // Position at screen center (hudLayer is in screen space)
     this.gameOverScreen.position.set(
       this.app.screen.width / 2,
@@ -559,6 +571,28 @@ export class Game {
   /** Clear all save data (for settings / debug). */
   resetSave() {
     this.saveMgr.reset();
+  }
+
+  private openUpgradeShop() {
+    if (this.upgradeShopScreen) return;
+    // Hide game over screen while shop is open
+    if (this.gameOverScreen) this.gameOverScreen.visible = false;
+    this.upgradeShopScreen = new UpgradeShopScreen(
+      this.saveMgr,
+      this.app.screen.width,
+      this.app.screen.height,
+      () => this.closeUpgradeShop(),
+    );
+    this.hudLayer.addChild(this.upgradeShopScreen);
+  }
+
+  private closeUpgradeShop() {
+    if (this.upgradeShopScreen) {
+      this.hudLayer.removeChild(this.upgradeShopScreen);
+      this.upgradeShopScreen.destroy({ children: true });
+      this.upgradeShopScreen = null;
+    }
+    if (this.gameOverScreen) this.gameOverScreen.visible = true;
   }
 
   // ------- Restart -------
@@ -604,11 +638,16 @@ export class Game {
     this.weaponMgr.reset();
     this.weaponMgr.addWeapon(WeaponType.PlasmaBolt);
 
-    // Reset player
-    this.player.maxHp = 100;
+    // Reset player with upgrade bonuses applied
+    const baseHp = 100;
+    const baseSpeed = 200;
+    const basePickup = 60;
+
+    this.player.maxHp = baseHp + getUpgradeBonus(this.saveMgr, UpgradeId.MaxHealth);
     this.player.hp = this.player.maxHp;
     this.player.invulnTimer = 0;
-    this.player.pickupRadius = 60;
+    this.player.speed = baseSpeed * (1 + getUpgradeBonus(this.saveMgr, UpgradeId.MoveSpeed) / 100);
+    this.player.pickupRadius = basePickup * (1 + getUpgradeBonus(this.saveMgr, UpgradeId.PickupRadius) / 100);
     this.player.xp = 0;
     this.player.level = 1;
     this.player.alpha = 1;
@@ -635,6 +674,11 @@ export class Game {
       this.hudLayer.removeChild(this.gameOverScreen);
       this.gameOverScreen.destroy({ children: true });
       this.gameOverScreen = null;
+    }
+    if (this.upgradeShopScreen) {
+      this.hudLayer.removeChild(this.upgradeShopScreen);
+      this.upgradeShopScreen.destroy({ children: true });
+      this.upgradeShopScreen = null;
     }
   }
 }
