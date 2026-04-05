@@ -199,7 +199,7 @@ export class LightningEffect extends Container {
 export interface WeaponManagerDeps {
   getPlayerPos: () => { x: number; y: number };
   getEnemies: () => Enemy[];
-  spawnProjectile: (x: number, y: number, vx: number, vy: number, damage: number, color: number, piercing?: boolean) => void;
+  spawnProjectile: (x: number, y: number, vx: number, vy: number, damage: number, color: number, weaponType?: string) => void;
   spawnFlameZone: (x: number, y: number, damage: number, radius: number, duration: number) => void;
   spawnLightning: (points: { x: number; y: number }[]) => void;
   damageEnemy: (enemy: Enemy, damage: number) => void;
@@ -324,7 +324,7 @@ export class WeaponManager {
         pos.x, pos.y,
         Math.cos(a) * stats.projectileSpeed,
         Math.sin(a) * stats.projectileSpeed,
-        stats.damage, color,
+        stats.damage, color, WeaponType.PlasmaBolt,
       );
     }
   }
@@ -346,7 +346,7 @@ export class WeaponManager {
         pos.x, pos.y,
         Math.cos(a) * stats.projectileSpeed,
         Math.sin(a) * stats.projectileSpeed,
-        stats.damage, color,
+        stats.damage, color, WeaponType.ScatterShot,
       );
     }
   }

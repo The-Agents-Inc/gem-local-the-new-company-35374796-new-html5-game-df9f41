@@ -2,12 +2,13 @@ import { Application, Container, Text, TextStyle } from "pixi.js";
 import { Keyboard } from "./input";
 import { Pool } from "./pool";
 import { Player, Enemy, Projectile, DamageNumber, XpGem } from "./entities";
-import { HUD, RunSummaryScreen, LevelUpScreen, WeaponChoice, UpgradeShopScreen, CharacterSelectScreen, LeaderboardScreen } from "./hud";
+import { HUD, RunSummaryScreen, LevelUpScreen, WeaponChoice, UpgradeShopScreen, CharacterSelectScreen } from "./hud";
 import { WeaponManager, WeaponType, FlameZone, LightningEffect } from "./weapons";
 import { SaveManager } from "./save";
 import { goldPerKill, getUpgradeBonus, UpgradeId } from "./upgrades";
 import { CharacterId, CHARACTER_DEFS } from "./characters";
 import { SpatialHash } from "./spatial";
+import { ParticleSystem, ScreenFlash } from "./juice";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -103,6 +104,10 @@ export class Game {
   // Off-screen cull distance squared (entities beyond this are recycled)
   private readonly CULL_DIST_SQ = 1600 * 1600;
 
+  // Juice — particles & screen flash
+  private particles!: ParticleSystem;
+  private screenFlash!: ScreenFlash;
+
   // FPS / debug overlay
   private fpsText: Text | null = null;
   private fpsAccum = 0;
@@ -116,6 +121,14 @@ export class Game {
 
     app.stage.addChild(this.world);
     app.stage.addChild(this.hudLayer);
+
+    // Particle system (world-space, rendered above entities)
+    this.particles = new ParticleSystem();
+    this.world.addChild(this.particles);
+
+    // Screen flash (HUD-space overlay)
+    this.screenFlash = new ScreenFlash();
+    this.hudLayer.addChild(this.screenFlash);
 
     // Player
     this.player = new Player();
@@ -172,7 +185,7 @@ export class Game {
     this.weaponMgr = new WeaponManager(this.world, {
       getPlayerPos: () => ({ x: this.player.x, y: this.player.y }),
       getEnemies: () => this.enemies,
-      spawnProjectile: (x, y, vx, vy, damage, _color) => {
+      spawnProjectile: (x, y, vx, vy, damage, _color, weaponType) => {
         const dmgMult = 1 + getUpgradeBonus(this.saveMgr, UpgradeId.WeaponDamage) / 100;
         const p = this.projPool.get();
         p.position.set(x, y);
@@ -180,6 +193,7 @@ export class Game {
         p.vy = vy;
         p.damage = Math.round(damage * dmgMult);
         p.rotation = Math.atan2(vy, vx);
+        p.weaponType = weaponType ?? "";
         this.projectiles.push(p);
       },
       spawnFlameZone: (x, y, damage, radius, duration) => {
@@ -191,6 +205,15 @@ export class Game {
         const l = this.lightningPool.get();
         l.drawChain(points);
         this.lightningEffects.push(l);
+        // Lightning chain hit particles — sparks at each hit point (skip first = player)
+        for (let i = 1; i < points.length; i++) {
+          this.particles.burstSpark(
+            points[i].x, points[i].y,
+            5 + Math.floor(Math.random() * 3), // 5-7 sparks
+            [WEAPON_COLORS[WeaponType.LightningChain], 0xffffff],
+            100, 180, 0.2, 2,
+          );
+        }
       },
       damageEnemy: (enemy, damage) => {
         const dmgMult = 1 + getUpgradeBonus(this.saveMgr, UpgradeId.WeaponDamage) / 100;
@@ -261,6 +284,8 @@ export class Game {
     this.updateFlameZones(dt);
     this.updateLightningEffects(dt);
     this.updateDamageNumbers(dt);
+    this.particles.update(dt);
+    this.screenFlash.update(dt);
     this.updateSpawner(dt);
     this.cullOffScreen();
     this.updateCamera();
@@ -275,7 +300,7 @@ export class Game {
       this.fpsFrames = 0;
       this.fpsAccum = 0;
       if (this.fpsText && this.fpsText.visible) {
-        this.fpsText.text = `FPS:${this.fpsDisplay} E:${this.enemies.length} P:${this.projectiles.length} G:${this.xpGems.length}`;
+        this.fpsText.text = `FPS:${this.fpsDisplay} E:${this.enemies.length} P:${this.projectiles.length} G:${this.xpGems.length} DC:${this.world.children.length}`;
         this.fpsText.position.y = this.app.screen.height - 16;
       }
     }
@@ -351,6 +376,9 @@ export class Game {
     this.spawnTimer -= dt;
     if (this.spawnTimer > 0) return;
     this.spawnTimer = this.spawnInterval;
+
+    // Enforce enemy count cap
+    if (this.enemies.length >= this.MAX_ENEMIES) return;
 
     // Spawn outside visible area
     const screen = this.app.screen;
@@ -655,6 +683,44 @@ export class Game {
         if (i < lastD) this.dmgNumbers[i] = this.dmgNumbers[lastD];
         this.dmgNumbers.length = lastD;
         this.dmgPool.release(d);
+      }
+    }
+  }
+
+  // ------- Off-screen culling — recycle entities too far from player -------
+  private cullOffScreen() {
+    const px = this.player.x;
+    const py = this.player.y;
+    // Cull enemies
+    for (let i = this.enemies.length - 1; i >= 0; i--) {
+      const e = this.enemies[i];
+      const dx = e.x - px;
+      const dy = e.y - py;
+      if (dx * dx + dy * dy > this.CULL_DIST_SQ) {
+        e.alive = false;
+        e.visible = false;
+        e._arrIdx = -1;
+        const last = this.enemies.length - 1;
+        if (i < last) {
+          this.enemies[i] = this.enemies[last];
+          this.enemies[i]._arrIdx = i;
+        }
+        this.enemies.length = last;
+        this.enemyPool.release(e);
+      }
+    }
+    // Cull XP gems
+    for (let i = this.xpGems.length - 1; i >= 0; i--) {
+      const g = this.xpGems[i];
+      const dx = g.x - px;
+      const dy = g.y - py;
+      if (dx * dx + dy * dy > this.CULL_DIST_SQ) {
+        g.alive = false;
+        g.visible = false;
+        const last = this.xpGems.length - 1;
+        if (i < last) this.xpGems[i] = this.xpGems[last];
+        this.xpGems.length = last;
+        this.gemPool.release(g);
       }
     }
   }

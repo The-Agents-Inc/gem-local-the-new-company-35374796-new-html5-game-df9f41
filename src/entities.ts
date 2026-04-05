@@ -182,6 +182,7 @@ export class Projectile extends Container {
   alive = true;
   lifetime = 0;
   readonly maxLifetime = 1.5; // seconds
+  weaponType = ""; // set by weapon manager for particle effects
 
   private body: Graphics;
 
