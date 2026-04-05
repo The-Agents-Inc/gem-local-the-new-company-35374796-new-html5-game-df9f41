@@ -207,6 +207,20 @@ export class Game {
 
     // Show character select on startup
     this.showCharacterSelect();
+
+    // Dev-mode FPS overlay (toggle with ` key)
+    this.fpsText = new Text({
+      text: "",
+      style: new TextStyle({ fontFamily: "monospace", fontSize: 12, fill: 0x00ff00 }),
+    });
+    this.fpsText.position.set(4, this.app.screen.height - 16);
+    this.fpsText.visible = false;
+    this.hudLayer.addChild(this.fpsText);
+    window.addEventListener("keydown", (ev) => {
+      if (ev.code === "Backquote" && this.fpsText) {
+        this.fpsText.visible = !this.fpsText.visible;
+      }
+    });
   }
 
   // Called every frame by app.ticker
@@ -224,15 +238,20 @@ export class Game {
     }
     if (this.paused) return; // paused during level-up selection
 
-    const dt = ticker.deltaTime / 60; // convert frame-delta to seconds
+    const dt = Math.min(ticker.deltaTime / 60, 0.05); // cap dt to avoid spiral of death
 
     this.elapsed += dt;
 
     this.updatePlayer(dt);
+    this.player.updateFlash(dt);
     this.updatePassives(dt);
     this.weaponMgr.update(dt);
     this.updateProjectiles(dt);
     this.updateEnemies(dt);
+
+    // Build spatial hash once per frame for all collision queries
+    this.enemyGrid.build(this.enemies);
+
     this.checkProjectileEnemyCollisions();
     this.checkEnemyPlayerCollisions();
     this.updateXpGems(dt);
@@ -240,9 +259,23 @@ export class Game {
     this.updateLightningEffects(dt);
     this.updateDamageNumbers(dt);
     this.updateSpawner(dt);
+    this.cullOffScreen();
     this.updateCamera();
     const ownedWeapons = this.weaponMgr.weapons.map(w => ({ type: w.type, level: w.level }));
     this.hud.update(this.player.hp, this.player.maxHp, this.kills, this.elapsed, this.player.level, this.player.xpProgress, this.app.screen.width, this.app.screen.height, ownedWeapons, this.runGold);
+
+    // FPS overlay
+    this.fpsAccum += dt;
+    this.fpsFrames++;
+    if (this.fpsAccum >= 0.5) {
+      this.fpsDisplay = Math.round(this.fpsFrames / this.fpsAccum);
+      this.fpsFrames = 0;
+      this.fpsAccum = 0;
+      if (this.fpsText && this.fpsText.visible) {
+        this.fpsText.text = `FPS:${this.fpsDisplay} E:${this.enemies.length} P:${this.projectiles.length} G:${this.xpGems.length}`;
+        this.fpsText.position.y = this.app.screen.height - 16;
+      }
+    }
 
     if (this.player.hp <= 0) {
       this.triggerGameOver();
@@ -300,7 +333,10 @@ export class Game {
     const p = this.projectiles[index];
     p.alive = false;
     p.visible = false;
-    this.projectiles.splice(index, 1);
+    // Swap-remove: O(1) instead of splice O(n)
+    const last = this.projectiles.length - 1;
+    if (index < last) this.projectiles[index] = this.projectiles[last];
+    this.projectiles.length = last;
     this.projPool.release(p);
   }
 
@@ -327,7 +363,8 @@ export class Game {
 
   // ------- Enemy AI: chase player -------
   private updateEnemies(dt: number) {
-    for (const e of this.enemies) {
+    for (let i = 0; i < this.enemies.length; i++) {
+      const e = this.enemies[i];
       if (!e.alive) continue;
       const dx = this.player.x - e.x;
       const dy = this.player.y - e.y;
@@ -337,15 +374,19 @@ export class Game {
         e.y += (dy / len) * e.speed * dt;
       }
       e.contactTimer = Math.max(0, e.contactTimer - dt);
+      e.updateFlash(dt);
     }
   }
 
-  // ------- Collision: projectiles ↔ enemies -------
+  // ------- Collision: projectiles ↔ enemies (spatial hash accelerated) -------
   private checkProjectileEnemyCollisions() {
     for (let pi = this.projectiles.length - 1; pi >= 0; pi--) {
       const p = this.projectiles[pi];
-      for (let ei = this.enemies.length - 1; ei >= 0; ei--) {
-        const e = this.enemies[ei];
+      // Query only nearby enemies via spatial hash
+      this.enemyGrid.query(p.x, p.y, p.radius + 12, this.queryBuf);
+      let hit = false;
+      for (let qi = 0; qi < this.queryBuf.length; qi++) {
+        const e = this.queryBuf[qi];
         if (!e.alive) continue;
         if (circleHit(p.x, p.y, p.radius, e.x, e.y, e.radius)) {
           e.hp -= p.damage;
@@ -355,8 +396,10 @@ export class Game {
           this.killProjectile(pi);
 
           if (e.hp <= 0) {
-            this.killEnemy(ei);
+            const idx = this.enemies.indexOf(e);
+            if (idx >= 0) this.killEnemy(idx);
           }
+          hit = true;
           break; // projectile used up
         }
       }

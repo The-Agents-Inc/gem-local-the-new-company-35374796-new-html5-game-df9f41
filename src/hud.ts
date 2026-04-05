@@ -779,6 +779,7 @@ const PASSIVE_DESC_STYLE = new TextStyle({
 
 export class CharacterSelectScreen extends Container {
   private onSelect: ((charId: CharacterId) => void) | null = null;
+  private onLeaderboard: (() => void) | null = null;
   private saveMgr: SaveManager;
   private cardContainer: Container;
   private goldDisplay: Text;
@@ -790,10 +791,12 @@ export class CharacterSelectScreen extends Container {
     screenWidth: number,
     screenHeight: number,
     onSelectCallback: (charId: CharacterId) => void,
+    onLeaderboardCallback?: () => void,
   ) {
     super();
     this.saveMgr = saveMgr;
     this.onSelect = onSelectCallback;
+    this.onLeaderboard = onLeaderboardCallback ?? null;
     this.screenW = screenWidth;
     this.screenH = screenHeight;
 
@@ -817,6 +820,35 @@ export class CharacterSelectScreen extends Container {
     this.goldDisplay.anchor.set(0.5, 0);
     this.goldDisplay.position.set(screenWidth / 2, 72);
     this.addChild(this.goldDisplay);
+
+    // Leaderboard button (top-right area)
+    if (this.onLeaderboard) {
+      const lbBtn = new Container();
+      lbBtn.position.set(screenWidth - 110, 35);
+      lbBtn.eventMode = "static";
+      lbBtn.cursor = "pointer";
+
+      const lbBg = new Graphics()
+        .roundRect(0, 0, 160, 32, 6)
+        .fill({ color: 0x1a1a2e })
+        .roundRect(0, 0, 160, 32, 6)
+        .stroke({ color: 0xffcc33, width: 2 });
+      lbBtn.addChild(lbBg);
+
+      const lbText = new Text({
+        text: "LEADERBOARD",
+        style: new TextStyle({ fontFamily: "monospace", fontSize: 14, fill: 0xffcc33, fontWeight: "bold" }),
+      });
+      lbText.anchor.set(0.5);
+      lbText.position.set(80, 16);
+      lbBtn.addChild(lbText);
+
+      lbBtn.on("pointerover", () => { lbBg.tint = 0xcccccc; });
+      lbBtn.on("pointerout", () => { lbBg.tint = 0xffffff; });
+      const cb = this.onLeaderboard;
+      lbBtn.on("pointerdown", () => { cb(); });
+      this.addChild(lbBtn);
+    }
 
     // Character cards
     this.cardContainer = new Container();
