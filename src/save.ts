@@ -23,6 +23,7 @@ export interface SaveData {
   upgrades: string[]; // legacy — kept for migration
   upgradeTiers: Record<string, number>; // upgrade id → tier (0 = not purchased)
   unlockedCharacters: string[]; // character ids
+  selectedCharacter: string; // currently selected character id
   runHistory: RunRecord[];
   bestKills: number;
   bestTime: number; // seconds
@@ -36,7 +37,8 @@ function createFreshSave(): SaveData {
     gold: 0,
     upgrades: [],
     upgradeTiers: {},
-    unlockedCharacters: [],
+    unlockedCharacters: ["nova"],
+    selectedCharacter: "nova",
     runHistory: [],
     bestKills: 0,
     bestTime: 0,
@@ -57,7 +59,8 @@ function migrate(raw: Record<string, unknown>): SaveData {
     raw.gold ??= 0;
     raw.upgrades ??= [];
     raw.upgradeTiers ??= {};
-    raw.unlockedCharacters ??= [];
+    raw.unlockedCharacters ??= ["nova"];
+    raw.selectedCharacter ??= "nova";
     raw.runHistory ??= [];
     raw.bestKills ??= 0;
     raw.bestTime ??= 0;
@@ -130,6 +133,27 @@ export class SaveManager {
     this.data.upgradeTiers[upgradeId] = (this.data.upgradeTiers[upgradeId] ?? 0) + 1;
     this.persist();
     return true;
+  }
+
+  /** Check if a character is unlocked. */
+  isCharacterUnlocked(charId: string): boolean {
+    return this.data.unlockedCharacters.includes(charId);
+  }
+
+  /** Attempt to unlock a character. Returns true if successful. */
+  unlockCharacter(charId: string, cost: number): boolean {
+    if (this.data.unlockedCharacters.includes(charId)) return true;
+    if (this.data.gold < cost) return false;
+    this.data.gold -= cost;
+    this.data.unlockedCharacters.push(charId);
+    this.persist();
+    return true;
+  }
+
+  /** Set the selected character. */
+  selectCharacter(charId: string): void {
+    this.data.selectedCharacter = charId;
+    this.persist();
   }
 
   /** Reset all save data and clear storage. */
