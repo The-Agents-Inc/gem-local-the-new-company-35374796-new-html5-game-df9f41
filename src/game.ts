@@ -2,7 +2,7 @@ import { Application, Container } from "pixi.js";
 import { Keyboard } from "./input";
 import { Pool } from "./pool";
 import { Player, Enemy, Projectile, DamageNumber, XpGem } from "./entities";
-import { HUD, GameOverScreen, LevelUpScreen, WeaponChoice, UpgradeShopScreen } from "./hud";
+import { HUD, RunSummaryScreen, LevelUpScreen, WeaponChoice, UpgradeShopScreen } from "./hud";
 import { WeaponManager, WeaponType, FlameZone, LightningEffect } from "./weapons";
 import { SaveManager } from "./save";
 import { goldPerKill, getUpgradeBonus, UpgradeId } from "./upgrades";
@@ -60,7 +60,7 @@ export class Game {
 
   // HUD
   private hud: HUD;
-  private gameOverScreen: GameOverScreen | null = null;
+  private runSummaryScreen: RunSummaryScreen | null = null;
   private levelUpScreen: LevelUpScreen | null = null;
   private upgradeShopScreen: UpgradeShopScreen | null = null;
 
@@ -197,7 +197,12 @@ export class Game {
       this.restart();
       return;
     }
-    if (this.gameOver) return;
+    if (this.gameOver) {
+      // Drive summary screen animations
+      const dt = ticker.deltaTime / 60;
+      if (this.runSummaryScreen) this.runSummaryScreen.updateAnim(dt);
+      return;
+    }
     if (this.paused) return; // paused during level-up selection
 
     const dt = ticker.deltaTime / 60; // convert frame-delta to seconds
@@ -553,19 +558,22 @@ export class Game {
     this.saveMgr.recordRun(this.kills, this.elapsed, this.player.level, weaponNames, this.runGold);
 
     const save = this.saveMgr.save;
-    this.gameOverScreen = new GameOverScreen(
-      this.kills,
-      this.elapsed,
-      this.runGold,
-      save.gold,
+    const ownedWeapons = this.weaponMgr.weapons.map(w => ({ type: w.type, level: w.level }));
+    this.runSummaryScreen = new RunSummaryScreen(
+      {
+        kills: this.kills,
+        elapsed: this.elapsed,
+        level: this.player.level,
+        weapons: ownedWeapons,
+        goldEarned: this.runGold,
+        totalGold: save.gold,
+      },
+      this.app.screen.width,
+      this.app.screen.height,
       () => this.openUpgradeShop(),
+      () => { this.restartQueued = true; },
     );
-    // Position at screen center (hudLayer is in screen space)
-    this.gameOverScreen.position.set(
-      this.app.screen.width / 2,
-      this.app.screen.height / 2,
-    );
-    this.hudLayer.addChild(this.gameOverScreen);
+    this.hudLayer.addChild(this.runSummaryScreen);
   }
 
   /** Clear all save data (for settings / debug). */
@@ -575,8 +583,8 @@ export class Game {
 
   private openUpgradeShop() {
     if (this.upgradeShopScreen) return;
-    // Hide game over screen while shop is open
-    if (this.gameOverScreen) this.gameOverScreen.visible = false;
+    // Hide summary screen while shop is open
+    if (this.runSummaryScreen) this.runSummaryScreen.visible = false;
     this.upgradeShopScreen = new UpgradeShopScreen(
       this.saveMgr,
       this.app.screen.width,
@@ -592,7 +600,7 @@ export class Game {
       this.upgradeShopScreen.destroy({ children: true });
       this.upgradeShopScreen = null;
     }
-    if (this.gameOverScreen) this.gameOverScreen.visible = true;
+    if (this.runSummaryScreen) this.runSummaryScreen.visible = true;
   }
 
   // ------- Restart -------
@@ -670,10 +678,10 @@ export class Game {
       this.levelUpScreen.destroy({ children: true });
       this.levelUpScreen = null;
     }
-    if (this.gameOverScreen) {
-      this.hudLayer.removeChild(this.gameOverScreen);
-      this.gameOverScreen.destroy({ children: true });
-      this.gameOverScreen = null;
+    if (this.runSummaryScreen) {
+      this.hudLayer.removeChild(this.runSummaryScreen);
+      this.runSummaryScreen.destroy({ children: true });
+      this.runSummaryScreen = null;
     }
     if (this.upgradeShopScreen) {
       this.hudLayer.removeChild(this.upgradeShopScreen);

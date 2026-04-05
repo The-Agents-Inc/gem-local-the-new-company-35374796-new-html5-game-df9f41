@@ -2,6 +2,7 @@ import { Container, Graphics, Text, TextStyle } from "pixi.js";
 import { WeaponType, WEAPON_NAMES, WEAPON_COLORS, WEAPON_DEFS } from "./weapons";
 import { ALL_UPGRADES, canAffordUpgrade, purchaseUpgrade } from "./upgrades";
 import { SaveManager } from "./save";
+import { ALL_CHARACTERS, CharacterDef, CharacterId } from "./characters";
 
 const STYLE = new TextStyle({
   fontFamily: "monospace",
@@ -288,80 +289,212 @@ export class LevelUpScreen extends Container {
 }
 
 // ---------------------------------------------------------------------------
-// Game Over Screen
+// Run Summary Screen — animated post-death stats + gold reward
 // ---------------------------------------------------------------------------
-export class GameOverScreen extends Container {
+export interface RunSummaryData {
+  kills: number;
+  elapsed: number;
+  level: number;
+  weapons: { type: WeaponType; level: number }[];
+  goldEarned: number;
+  totalGold: number;
+}
+
+const STAT_LABEL_STYLE = new TextStyle({ fontFamily: "monospace", fontSize: 14, fill: 0x999999 });
+const STAT_VAL_STYLE = new TextStyle({ fontFamily: "monospace", fontSize: 22, fill: 0xffffff, fontWeight: "bold" });
+const GOLD_VAL_STYLE = new TextStyle({ fontFamily: "monospace", fontSize: 26, fill: 0xffcc33, fontWeight: "bold" });
+
+class AnimatedStat {
+  current = 0;
+  target: number;
+  delay: number;
+  speed: number;
+  done = false;
+  format: (v: number) => string;
+
+  constructor(target: number, delay: number, format: (v: number) => string) {
+    this.target = target;
+    this.delay = delay;
+    this.speed = Math.max(1, target / 0.8);
+    this.format = format;
+  }
+
+  tick(dt: number): string {
+    if (this.delay > 0) { this.delay -= dt; return this.format(0); }
+    if (!this.done) {
+      this.current += this.speed * dt;
+      if (this.current >= this.target) { this.current = this.target; this.done = true; }
+    }
+    return this.format(Math.floor(this.current));
+  }
+}
+
+export class RunSummaryScreen extends Container {
   private onShop: (() => void) | null = null;
+  private onRestart: (() => void) | null = null;
+  private animEntries: { stat: AnimatedStat; display: Text }[] = [];
+  private goldAnim: AnimatedStat;
+  private goldDisplay: Text;
 
-  constructor(kills: number, elapsed: number, goldEarned: number, totalGold: number, onShopCallback: () => void) {
+  constructor(
+    data: RunSummaryData,
+    screenWidth: number,
+    screenHeight: number,
+    onShopCb: () => void,
+    onRestartCb: () => void,
+  ) {
     super();
-    this.onShop = onShopCallback;
+    this.onShop = onShopCb;
+    this.onRestart = onRestartCb;
 
+    // Full-screen overlay
     const overlay = new Graphics()
-      .rect(0, 0, 2000, 2000)
-      .fill({ color: 0x000000, alpha: 0.7 });
-    overlay.position.set(-1000, -1000);
+      .rect(0, 0, screenWidth, screenHeight)
+      .fill({ color: 0x000000, alpha: 0.8 });
     this.addChild(overlay);
 
-    const title = new Text({ text: "GAME OVER", style: TITLE_STYLE });
-    title.anchor.set(0.5);
-    title.position.set(0, -70);
+    const cx = screenWidth / 2;
+    let y = screenHeight * 0.08;
+
+    // Title
+    const title = new Text({ text: "RUN COMPLETE", style: TITLE_STYLE });
+    title.anchor.set(0.5, 0);
+    title.position.set(cx, y);
     this.addChild(title);
+    y += 65;
 
-    const mins = Math.floor(elapsed / 60);
-    const secs = Math.floor(elapsed % 60)
-      .toString()
-      .padStart(2, "0");
-    const stats = new Text({
-      text: `Survived: ${mins}:${secs}  |  Kills: ${kills}`,
-      style: SUB_STYLE,
+    // Animated stat rows
+    const timeFmt = (v: number) => {
+      const m = Math.floor(v / 60);
+      const s = Math.floor(v % 60).toString().padStart(2, "0");
+      return `${m}:${s}`;
+    };
+
+    const rows = [
+      { label: "TIME SURVIVED", target: data.elapsed, format: timeFmt, delay: 0.2 },
+      { label: "ENEMIES KILLED", target: data.kills, format: (v: number) => `${v}`, delay: 0.5 },
+      { label: "LEVEL REACHED", target: data.level, format: (v: number) => `${v}`, delay: 0.8 },
+    ];
+
+    for (const r of rows) {
+      const lbl = new Text({ text: r.label, style: STAT_LABEL_STYLE });
+      lbl.anchor.set(0.5, 0);
+      lbl.position.set(cx, y);
+      this.addChild(lbl);
+
+      const val = new Text({ text: r.format(0), style: STAT_VAL_STYLE });
+      val.anchor.set(0.5, 0);
+      val.position.set(cx, y + 18);
+      this.addChild(val);
+
+      this.animEntries.push({ stat: new AnimatedStat(r.target, r.delay, r.format), display: val });
+      y += 52;
+    }
+
+    // Weapons row
+    y += 8;
+    const wLbl = new Text({ text: "WEAPONS", style: STAT_LABEL_STYLE });
+    wLbl.anchor.set(0.5, 0);
+    wLbl.position.set(cx, y);
+    this.addChild(wLbl);
+    y += 22;
+
+    const wRow = new Container();
+    wRow.position.set(cx, y);
+    const totalW = data.weapons.length * 36 - 6;
+    for (let i = 0; i < data.weapons.length; i++) {
+      const w = data.weapons[i];
+      const color = WEAPON_COLORS[w.type];
+      const xOff = i * 36 - totalW / 2;
+      const icon = new Graphics()
+        .roundRect(xOff, 0, 30, 30, 4).fill({ color: 0x1a1a2e })
+        .roundRect(xOff, 0, 30, 30, 4).stroke({ color, width: 2 })
+        .circle(xOff + 15, 15, 8).fill({ color });
+      wRow.addChild(icon);
+
+      const nm = new Text({
+        text: WEAPON_NAMES[w.type],
+        style: new TextStyle({ fontFamily: "monospace", fontSize: 10, fill: color }),
+      });
+      nm.anchor.set(0.5, 0);
+      nm.position.set(xOff + 15, 34);
+      wRow.addChild(nm);
+    }
+    this.addChild(wRow);
+    y += 56;
+
+    // Divider
+    this.addChild(new Graphics().rect(cx - 100, y, 200, 1).fill({ color: 0x444444 }));
+    y += 16;
+
+    // Gold earned (animated)
+    const gLbl = new Text({ text: "GOLD EARNED", style: STAT_LABEL_STYLE });
+    gLbl.anchor.set(0.5, 0);
+    gLbl.position.set(cx, y);
+    this.addChild(gLbl);
+
+    this.goldDisplay = new Text({ text: "+0", style: GOLD_VAL_STYLE });
+    this.goldDisplay.anchor.set(0.5, 0);
+    this.goldDisplay.position.set(cx, y + 18);
+    this.addChild(this.goldDisplay);
+    this.goldAnim = new AnimatedStat(data.goldEarned, 1.2, (v) => `+${v}`);
+
+    const gTotal = new Text({
+      text: `Total: ${data.totalGold}`,
+      style: new TextStyle({ fontFamily: "monospace", fontSize: 14, fill: 0xffcc33 }),
     });
-    stats.anchor.set(0.5);
-    stats.position.set(0, -10);
-    this.addChild(stats);
+    gTotal.anchor.set(0.5, 0);
+    gTotal.position.set(cx, y + 48);
+    this.addChild(gTotal);
+    y += 78;
 
-    const goldStyle = new TextStyle({ fontFamily: "monospace", fontSize: 20, fill: 0xffcc33 });
-    const goldInfo = new Text({ text: `+${goldEarned} gold  (Total: ${totalGold})`, style: goldStyle });
-    goldInfo.anchor.set(0.5);
-    goldInfo.position.set(0, 25);
-    this.addChild(goldInfo);
-
-    // Shop button
-    const shopBtn = new Container();
-    shopBtn.position.set(0, 70);
-    shopBtn.eventMode = "static";
-    shopBtn.cursor = "pointer";
-
-    const btnBg = new Graphics()
-      .roundRect(-80, -18, 160, 36, 8)
-      .fill({ color: 0x2a1a4e })
-      .roundRect(-80, -18, 160, 36, 8)
-      .stroke({ color: 0xffcc33, width: 2 });
-    shopBtn.addChild(btnBg);
-
-    const btnText = new Text({ text: "UPGRADE SHOP", style: new TextStyle({ fontFamily: "monospace", fontSize: 16, fill: 0xffcc33, fontWeight: "bold" }) });
-    btnText.anchor.set(0.5);
-    shopBtn.addChild(btnText);
-
-    shopBtn.on("pointerover", () => { btnBg.tint = 0xcccccc; });
-    shopBtn.on("pointerout", () => { btnBg.tint = 0xffffff; });
-    shopBtn.on("pointerdown", (e) => {
+    // Buttons
+    y += 10;
+    this.addChild(this.buildBtn("UPGRADE SHOP", cx, y, 0xffcc33, 0x2a1a4e, (e) => {
       e.stopPropagation();
       if (this.onShop) this.onShop();
-    });
-    this.addChild(shopBtn);
+    }));
+    y += 48;
+    this.addChild(this.buildBtn("PLAY AGAIN", cx, y, 0x55ffaa, 0x1a2e1a, () => {
+      if (this.onRestart) this.onRestart();
+    }));
+  }
 
-    const restart = new Text({
-      text: "[SPACE] or [TAP] to restart",
-      style: SUB_STYLE,
+  private buildBtn(label: string, x: number, y: number, accent: number, bg: number, handler: (e: { stopPropagation: () => void }) => void): Container {
+    const btn = new Container();
+    btn.position.set(x, y);
+    btn.eventMode = "static";
+    btn.cursor = "pointer";
+
+    const bgGfx = new Graphics()
+      .roundRect(-90, -18, 180, 36, 8).fill({ color: bg })
+      .roundRect(-90, -18, 180, 36, 8).stroke({ color: accent, width: 2 });
+    btn.addChild(bgGfx);
+
+    const txt = new Text({
+      text: label,
+      style: new TextStyle({ fontFamily: "monospace", fontSize: 16, fill: accent, fontWeight: "bold" }),
     });
-    restart.anchor.set(0.5);
-    restart.position.set(0, 120);
-    this.addChild(restart);
+    txt.anchor.set(0.5);
+    btn.addChild(txt);
+
+    btn.on("pointerover", () => { bgGfx.tint = 0xcccccc; });
+    btn.on("pointerout", () => { bgGfx.tint = 0xffffff; });
+    btn.on("pointerdown", handler);
+    return btn;
+  }
+
+  /** Call each frame to drive count-up animations. */
+  updateAnim(dt: number) {
+    for (const { stat, display } of this.animEntries) {
+      display.text = stat.tick(dt);
+    }
+    this.goldDisplay.text = this.goldAnim.tick(dt);
   }
 
   destroy(options?: { children?: boolean }) {
     this.onShop = null;
+    this.onRestart = null;
     super.destroy(options);
   }
 }
