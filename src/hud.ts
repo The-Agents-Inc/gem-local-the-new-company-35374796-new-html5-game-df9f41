@@ -19,10 +19,87 @@ const SUB_STYLE = new TextStyle({
   fill: 0xffffff,
 });
 
+// ---------------------------------------------------------------------------
+// Ability definitions
+// ---------------------------------------------------------------------------
+export interface Ability {
+  id: string;
+  name: string;
+  description: string;
+  color: number;
+  apply: (player: { speed: number; attackCooldown: number; maxHp: number; hp: number; projectileDamage: number; projectileCount: number; pickupRadius: number; drawHpBar: () => void }) => void;
+}
+
+export const ALL_ABILITIES: Ability[] = [
+  {
+    id: "speed_up",
+    name: "Swift Boots",
+    description: "+15% move speed",
+    color: 0x55ccff,
+    apply: (p) => { p.speed *= 1.15; },
+  },
+  {
+    id: "rapid_fire",
+    name: "Rapid Fire",
+    description: "+20% attack speed",
+    color: 0xffaa33,
+    apply: (p) => { p.attackCooldown *= 0.8; },
+  },
+  {
+    id: "max_hp_up",
+    name: "Vitality",
+    description: "+25 max HP, heals 25",
+    color: 0x33ff66,
+    apply: (p) => { p.maxHp += 25; p.hp = Math.min(p.hp + 25, p.maxHp); p.drawHpBar(); },
+  },
+  {
+    id: "damage_up",
+    name: "Sharp Rounds",
+    description: "+4 projectile damage",
+    color: 0xff5555,
+    apply: (p) => { p.projectileDamage += 4; },
+  },
+  {
+    id: "multi_shot",
+    name: "Multi Shot",
+    description: "+1 projectile per shot",
+    color: 0xffee55,
+    apply: (p) => { p.projectileCount += 1; },
+  },
+  {
+    id: "magnet",
+    name: "Magnet",
+    description: "+50% pickup radius",
+    color: 0xaa55ff,
+    apply: (p) => { p.pickupRadius *= 1.5; },
+  },
+  {
+    id: "heal",
+    name: "Healing Surge",
+    description: "Restore 30 HP",
+    color: 0x55ff99,
+    apply: (p) => { p.hp = Math.min(p.hp + 30, p.maxHp); p.drawHpBar(); },
+  },
+];
+
+/** Pick N unique random abilities */
+export function pickRandomAbilities(n: number): Ability[] {
+  const pool = [...ALL_ABILITIES];
+  const result: Ability[] = [];
+  for (let i = 0; i < n && pool.length > 0; i++) {
+    const idx = Math.floor(Math.random() * pool.length);
+    result.push(pool.splice(idx, 1)[0]);
+  }
+  return result;
+}
+
 export class HUD extends Container {
   private hpText: Text;
   private killText: Text;
   private timerText: Text;
+  private levelText: Text;
+  private xpBarBg: Graphics;
+  private xpBarFill: Graphics;
 
   constructor() {
     super();
@@ -37,9 +114,19 @@ export class HUD extends Container {
     this.timerText = new Text({ text: "0:00", style: STYLE });
     this.timerText.position.set(12, 56);
     this.addChild(this.timerText);
+
+    this.levelText = new Text({ text: "Lv 1", style: STYLE });
+    this.levelText.position.set(12, 78);
+    this.addChild(this.levelText);
+
+    // XP bar across top of screen
+    this.xpBarBg = new Graphics();
+    this.addChild(this.xpBarBg);
+    this.xpBarFill = new Graphics();
+    this.addChild(this.xpBarFill);
   }
 
-  update(hp: number, maxHp: number, kills: number, elapsed: number) {
+  update(hp: number, maxHp: number, kills: number, elapsed: number, level: number, xpProgress: number, screenWidth: number) {
     this.hpText.text = `HP: ${Math.ceil(hp)} / ${maxHp}`;
     this.killText.text = `Kills: ${kills}`;
     const mins = Math.floor(elapsed / 60);
@@ -47,6 +134,13 @@ export class HUD extends Container {
       .toString()
       .padStart(2, "0");
     this.timerText.text = `${mins}:${secs}`;
+    this.levelText.text = `Lv ${level}`;
+
+    // XP bar at very top
+    const barH = 6;
+    const w = screenWidth;
+    this.xpBarBg.clear().rect(0, 0, w, barH).fill({ color: 0x222222 });
+    this.xpBarFill.clear().rect(0, 0, w * Math.min(1, xpProgress), barH).fill({ color: 0x55ffaa });
   }
 }
 
