@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "start": "serve -s dist -l 3000"
   },
   "dependencies": {
     "pixi.js": "^8.6.6"
