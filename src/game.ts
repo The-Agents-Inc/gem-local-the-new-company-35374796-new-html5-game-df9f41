@@ -4,6 +4,8 @@ import { Pool } from "./pool";
 import { Player, Enemy, Projectile, DamageNumber, XpGem } from "./entities";
 import { HUD, GameOverScreen, LevelUpScreen, WeaponChoice } from "./hud";
 import { WeaponManager, WeaponType, FlameZone, LightningEffect } from "./weapons";
+import { SaveManager } from "./save";
+import { goldPerKill } from "./upgrades";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -61,6 +63,9 @@ export class Game {
   private gameOverScreen: GameOverScreen | null = null;
   private levelUpScreen: LevelUpScreen | null = null;
 
+  // Persistence
+  private saveMgr: SaveManager;
+
   // State
   private kills = 0;
   private elapsed = 0;
@@ -70,10 +75,12 @@ export class Game {
   private restartQueued = false;
   private paused = false; // true during level-up selection
   private pendingLevelUps = 0; // queued level-ups
+  private runGold = 0; // gold accumulated this run
 
   constructor(app: Application) {
     this.app = app;
     this.kb = new Keyboard();
+    this.saveMgr = new SaveManager();
 
     app.stage.addChild(this.world);
     app.stage.addChild(this.hudLayer);
@@ -206,7 +213,7 @@ export class Game {
     this.updateSpawner(dt);
     this.updateCamera();
     const ownedWeapons = this.weaponMgr.weapons.map(w => ({ type: w.type, level: w.level }));
-    this.hud.update(this.player.hp, this.player.maxHp, this.kills, this.elapsed, this.player.level, this.player.xpProgress, this.app.screen.width, this.app.screen.height, ownedWeapons);
+    this.hud.update(this.player.hp, this.player.maxHp, this.kills, this.elapsed, this.player.level, this.player.xpProgress, this.app.screen.width, this.app.screen.height, ownedWeapons, this.runGold);
 
     if (this.player.hp <= 0) {
       this.triggerGameOver();
@@ -363,6 +370,7 @@ export class Game {
     this.enemies.splice(index, 1);
     this.enemyPool.release(e);
     this.kills++;
+    this.runGold += goldPerKill(this.elapsed);
   }
 
   // ------- XP Gems -------
@@ -533,13 +541,24 @@ export class Game {
   // ------- Game Over -------
   private triggerGameOver() {
     this.gameOver = true;
-    this.gameOverScreen = new GameOverScreen(this.kills, this.elapsed);
+
+    // Save run to persistent storage
+    const weaponNames = this.weaponMgr.weapons.map(w => w.type as string);
+    this.saveMgr.recordRun(this.kills, this.elapsed, this.player.level, weaponNames, this.runGold);
+
+    const save = this.saveMgr.save;
+    this.gameOverScreen = new GameOverScreen(this.kills, this.elapsed, save.gold, save.bestKills, save.totalRuns);
     // Position at screen center (hudLayer is in screen space)
     this.gameOverScreen.position.set(
       this.app.screen.width / 2,
       this.app.screen.height / 2,
     );
     this.hudLayer.addChild(this.gameOverScreen);
+  }
+
+  /** Clear all save data (for settings / debug). */
+  resetSave() {
+    this.saveMgr.reset();
   }
 
   // ------- Restart -------
@@ -604,6 +623,7 @@ export class Game {
     this.restartQueued = false;
     this.paused = false;
     this.pendingLevelUps = 0;
+    this.runGold = 0;
 
     // Remove overlays
     if (this.levelUpScreen) {
