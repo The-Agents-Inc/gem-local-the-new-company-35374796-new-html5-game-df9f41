@@ -8,7 +8,7 @@ import { SaveManager } from "./save";
 import { goldPerKill, getUpgradeBonus, UpgradeId } from "./upgrades";
 import { CharacterId, CHARACTER_DEFS } from "./characters";
 import { SpatialHash } from "./spatial";
-import { ParticleSystem, ScreenFlash } from "./juice";
+import { ParticleSystem, ScreenFlash, ScreenShake, FreezeFrame, CameraZoom, DeathSequence } from "./juice";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -104,9 +104,17 @@ export class Game {
   // Off-screen cull distance squared (entities beyond this are recycled)
   private readonly CULL_DIST_SQ = 1600 * 1600;
 
-  // Juice — particles & screen flash
+  // Juice — particles, screen flash, shake, freeze, zoom, death
   private particles!: ParticleSystem;
   private screenFlash!: ScreenFlash;
+  private screenShake = new ScreenShake();
+  private freezeFrame = new FreezeFrame();
+  private cameraZoom = new CameraZoom();
+  private deathSeq = new DeathSequence();
+
+  // Multi-kill tracking for freeze frame escalation
+  private recentKillTimes: number[] = [];
+  private readonly MULTIKILL_WINDOW = 0.05; // 50ms
 
   // FPS / debug overlay
   private fpsText: Text | null = null;
@@ -264,7 +272,34 @@ export class Game {
     }
     if (this.paused) return; // paused during level-up selection
 
-    const dt = Math.min(ticker.deltaTime / 60, 0.05); // cap dt to avoid spiral of death
+    const rawDt = Math.min(ticker.deltaTime / 60, 0.05); // cap dt to avoid spiral of death
+
+    // Death sequence runs on raw time (drives freeze/slow-mo itself)
+    if (this.deathSeq.active) {
+      const shakeReq = this.deathSeq.update(rawDt);
+      if (shakeReq) {
+        this.screenShake.add(shakeReq.shakeIntensity, shakeReq.shakeDuration);
+      }
+      this.player.alpha = this.deathSeq.playerAlpha;
+      // Still update visual systems during death
+      this.screenShake.update(rawDt);
+      this.cameraZoom.update(rawDt);
+      this.particles.update(rawDt * this.deathSeq.timeScale);
+      this.screenFlash.update(rawDt);
+      this.updateCamera();
+      return;
+    }
+
+    // Freeze frame — consume raw dt, skip game logic while frozen
+    if (this.freezeFrame.consume(rawDt)) {
+      // Still update shake/visual fx during freeze for feel
+      this.screenShake.update(rawDt);
+      this.screenFlash.update(rawDt);
+      this.updateCamera();
+      return;
+    }
+
+    const dt = rawDt;
 
     this.elapsed += dt;
 
@@ -286,6 +321,8 @@ export class Game {
     this.updateDamageNumbers(dt);
     this.particles.update(dt);
     this.screenFlash.update(dt);
+    this.screenShake.update(dt);
+    this.cameraZoom.update(dt);
     this.updateSpawner(dt);
     this.cullOffScreen();
     this.updateCamera();
@@ -306,7 +343,7 @@ export class Game {
     }
 
     if (this.player.hp <= 0) {
-      this.triggerGameOver();
+      this.triggerDeathSequence();
     }
   }
 
@@ -423,7 +460,8 @@ export class Game {
         e._queryStamp = this.queryStamp;
         if (circleHit(p.x, p.y, p.radius, e.x, e.y, e.radius)) {
           e.hp -= p.damage;
-          e.flashDamage();
+          const hitColor = p.weaponType ? (WEAPON_COLORS[p.weaponType as WeaponType] ?? 0xffffff) : 0xffffff;
+          e.flashDamage(hitColor);
           this.spawnDmgNumber(p.damage, e.x, e.y - 15);
           this.spawnWeaponHitParticles(p.weaponType, e.x, e.y, p.vx, p.vy);
 
@@ -478,6 +516,14 @@ export class Game {
         e.contactTimer = e.contactCooldown;
         this.spawnDmgNumber(e.damage, this.player.x, this.player.y - 20);
 
+        // Juice: screen shake on player hit (3px / 120ms)
+        const dx2 = e.x - this.player.x;
+        const dy2 = e.y - this.player.y;
+        const hitLen = Math.sqrt(dx2 * dx2 + dy2 * dy2) || 1;
+        this.screenShake.add(3, 0.12, -dx2 / hitLen * 0.3, -dy2 / hitLen * 0.3);
+        // Red screen flash on damage (alpha 0.25, 100ms)
+        this.screenFlash.flash(0xff0000, 0.25, 0.1, this.app.screen.width, this.app.screen.height);
+
         // Aegis passive: Thorns — reflect damage back to enemy
         if (this.activeCharId === CharacterId.Aegis) {
           const armorTier = this.saveMgr.getUpgradeTier(UpgradeId.Armor);
@@ -522,6 +568,18 @@ export class Game {
     this.enemyPool.release(e);
     this.kills++;
     this.runGold += goldPerKill(this.elapsed);
+
+    // Juice: shake on kill (1.5px / 80ms)
+    this.screenShake.add(1.5, 0.08);
+
+    // Juice: freeze frame on kill — 16ms normal, 32ms for multi-kill (3+ in 50ms)
+    const now = this.elapsed;
+    this.recentKillTimes.push(now);
+    // Prune old kills outside window
+    while (this.recentKillTimes.length > 0 && now - this.recentKillTimes[0] > this.MULTIKILL_WINDOW) {
+      this.recentKillTimes.shift();
+    }
+    this.freezeFrame.freeze(this.recentKillTimes.length >= 3 ? 0.032 : 0.016);
   }
 
   // ------- Per-weapon hit particles -------
@@ -603,6 +661,10 @@ export class Game {
           );
           // Screen flash — white, 0.15s
           this.screenFlash.flash(0xffffff, 0.3, 0.15, this.app.screen.width, this.app.screen.height);
+          // Juice: shake on level-up (6px / 200ms)
+          this.screenShake.add(6, 0.2);
+          // Juice: camera zoom on level-up (1.08× in 200ms, hold 100ms, out 300ms)
+          this.cameraZoom.pulse(1.08, 200, 100, 300);
           this.showLevelUpScreen();
         }
         g.alive = false;
@@ -665,7 +727,7 @@ export class Game {
           e._queryStamp = this.queryStamp;
           if (circleHit(f.x, f.y, f.radius, e.x, e.y, e.radius)) {
             e.hp -= f.damage;
-            e.flashDamage();
+            e.flashDamage(WEAPON_COLORS[WeaponType.FlameTrail]);
             this.spawnDmgNumber(f.damage, e.x, e.y - 15);
             if (e.hp <= 0 && e._arrIdx >= 0) {
               this.killEnemy(e._arrIdx);
@@ -773,13 +835,25 @@ export class Game {
   // ------- Camera -------
   private updateCamera() {
     const screen = this.app.screen;
-    this.world.x = -this.player.x + screen.width / 2;
-    this.world.y = -this.player.y + screen.height / 2;
+    const scale = this.cameraZoom.currentScale;
+    this.world.scale.set(scale);
+    // Center on player, apply zoom pivot at screen center, then add shake offset
+    this.world.x = (-this.player.x * scale) + screen.width / 2 + this.screenShake.offsetX;
+    this.world.y = (-this.player.y * scale) + screen.height / 2 + this.screenShake.offsetY;
+  }
+
+  // ------- Death Sequence (replaces instant game over) -------
+  private triggerDeathSequence() {
+    if (this.deathSeq.active) return;
+    // Red screen flash for death
+    this.screenFlash.flash(0xff0000, 0.4, 0.3, this.app.screen.width, this.app.screen.height);
+    this.deathSeq.start(() => this.triggerGameOver());
   }
 
   // ------- Game Over -------
   private triggerGameOver() {
     this.gameOver = true;
+    this.deathSeq.reset();
 
     // Save run to persistent storage
     const weaponNames = this.weaponMgr.weapons.map(w => w.type as string);
@@ -873,8 +947,13 @@ export class Game {
     }
     this.lightningEffects.length = 0;
 
-    // Clear particles
+    // Clear particles & juice systems
     this.particles.clearAll();
+    this.screenShake.reset();
+    this.freezeFrame.reset();
+    this.cameraZoom.reset();
+    this.deathSeq.reset();
+    this.recentKillTimes.length = 0;
 
     // Reset weapons and re-add default
     this.weaponMgr.reset();

@@ -155,9 +155,9 @@ export class Enemy extends Container implements HasHealth {
     this.body.tint = 0xffffff;
   }
 
-  flashDamage() {
-    this.body.tint = 0xffff00;
-    this.flashTimer = 0.08;
+  flashDamage(color = 0xffffff) {
+    this.body.tint = color;
+    this.flashTimer = 0.06;
   }
 
   updateFlash(dt: number) {
