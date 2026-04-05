@@ -125,6 +125,11 @@ export class Enemy extends Container implements HasHealth {
   contactTimer = 0;
   alive = true;
 
+  /** Index in Game.enemies[] — maintained by swap-remove for O(1) kills. */
+  _arrIdx = -1;
+  /** Frame stamp for spatial hash dedup — avoids double-processing per query. */
+  _queryStamp = -1;
+
   // Tick-based flash (replaces setTimeout)
   flashTimer = 0;
 

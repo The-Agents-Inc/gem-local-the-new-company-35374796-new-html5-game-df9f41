@@ -97,6 +97,9 @@ export class Game {
   // Enemy count cap — prevents late-game runaway
   private readonly MAX_ENEMIES = 300;
 
+  // Monotonic query stamp for spatial hash dedup (avoids Set allocation)
+  private queryStamp = 0;
+
   // Off-screen cull distance squared (entities beyond this are recycled)
   private readonly CULL_DIST_SQ = 1600 * 1600;
 
@@ -358,6 +361,7 @@ export class Game {
     const enemy = this.enemyPool.get();
     enemy.x = this.player.x + Math.cos(angle) * dist;
     enemy.y = this.player.y + Math.sin(angle) * dist;
+    enemy._arrIdx = this.enemies.length;
     this.enemies.push(enemy);
   }
 
@@ -383,11 +387,12 @@ export class Game {
     for (let pi = this.projectiles.length - 1; pi >= 0; pi--) {
       const p = this.projectiles[pi];
       // Query only nearby enemies via spatial hash
+      this.queryStamp++;
       this.enemyGrid.query(p.x, p.y, p.radius + 12, this.queryBuf);
-      let hit = false;
       for (let qi = 0; qi < this.queryBuf.length; qi++) {
         const e = this.queryBuf[qi];
-        if (!e.alive) continue;
+        if (!e.alive || e._queryStamp === this.queryStamp) continue;
+        e._queryStamp = this.queryStamp;
         if (circleHit(p.x, p.y, p.radius, e.x, e.y, e.radius)) {
           e.hp -= p.damage;
           e.flashDamage();
@@ -395,11 +400,9 @@ export class Game {
 
           this.killProjectile(pi);
 
-          if (e.hp <= 0) {
-            const idx = this.enemies.indexOf(e);
-            if (idx >= 0) this.killEnemy(idx);
+          if (e.hp <= 0 && e._arrIdx >= 0) {
+            this.killEnemy(e._arrIdx);
           }
-          hit = true;
           break; // projectile used up
         }
       }
@@ -453,9 +456,8 @@ export class Game {
           e.hp -= thornsDmg;
           e.flashDamage();
           this.spawnDmgNumber(thornsDmg, e.x, e.y - 15);
-          if (e.hp <= 0) {
-            const idx = this.enemies.indexOf(e);
-            if (idx >= 0) this.killEnemy(idx);
+          if (e.hp <= 0 && e._arrIdx >= 0) {
+            this.killEnemy(e._arrIdx);
           }
         }
 
@@ -470,7 +472,14 @@ export class Game {
     this.spawnXpGem(e.x, e.y);
     e.alive = false;
     e.visible = false;
-    this.enemies.splice(index, 1);
+    e._arrIdx = -1;
+    // Swap-remove: O(1) instead of splice O(n)
+    const last = this.enemies.length - 1;
+    if (index < last) {
+      this.enemies[index] = this.enemies[last];
+      this.enemies[index]._arrIdx = index;
+    }
+    this.enemies.length = last;
     this.enemyPool.release(e);
     this.kills++;
     this.runGold += goldPerKill(this.elapsed);
@@ -527,7 +536,10 @@ export class Game {
         }
         g.alive = false;
         g.visible = false;
-        this.xpGems.splice(i, 1);
+        // Swap-remove: O(1)
+        const lastGem = this.xpGems.length - 1;
+        if (i < lastGem) this.xpGems[i] = this.xpGems[lastGem];
+        this.xpGems.length = lastGem;
         this.gemPool.release(g);
       }
     }
@@ -571,18 +583,21 @@ export class Game {
       f.alpha = 1 - f.lifetime / f.maxLifetime * 0.5;
       f.tickTimer -= dt;
 
-      // Damage enemies on tick
+      // Damage enemies on tick (spatial hash accelerated)
       if (f.tickTimer <= 0) {
         f.tickTimer = f.tickInterval;
-        for (const e of this.enemies) {
-          if (!e.alive) continue;
+        this.queryStamp++;
+        this.enemyGrid.query(f.x, f.y, f.radius + 12, this.queryBuf);
+        for (let qi = 0; qi < this.queryBuf.length; qi++) {
+          const e = this.queryBuf[qi];
+          if (!e.alive || e._queryStamp === this.queryStamp) continue;
+          e._queryStamp = this.queryStamp;
           if (circleHit(f.x, f.y, f.radius, e.x, e.y, e.radius)) {
             e.hp -= f.damage;
             e.flashDamage();
             this.spawnDmgNumber(f.damage, e.x, e.y - 15);
-            if (e.hp <= 0) {
-              const idx = this.enemies.indexOf(e);
-              if (idx >= 0) this.killEnemy(idx);
+            if (e.hp <= 0 && e._arrIdx >= 0) {
+              this.killEnemy(e._arrIdx);
             }
           }
         }
@@ -591,7 +606,10 @@ export class Game {
       if (f.lifetime >= f.maxLifetime) {
         f.alive = false;
         f.visible = false;
-        this.flameZones.splice(i, 1);
+        // Swap-remove: O(1) instead of splice O(n)
+        const lastF = this.flameZones.length - 1;
+        if (i < lastF) this.flameZones[i] = this.flameZones[lastF];
+        this.flameZones.length = lastF;
         this.flamePool.release(f);
       }
     }
@@ -606,7 +624,10 @@ export class Game {
       if (l.lifetime >= l.maxLifetime) {
         l.alive = false;
         l.visible = false;
-        this.lightningEffects.splice(i, 1);
+        // Swap-remove: O(1)
+        const lastL = this.lightningEffects.length - 1;
+        if (i < lastL) this.lightningEffects[i] = this.lightningEffects[lastL];
+        this.lightningEffects.length = lastL;
         this.lightningPool.release(l);
       }
     }
@@ -629,7 +650,10 @@ export class Game {
       if (d.lifetime >= d.maxLife) {
         d.alive = false;
         d.visible = false;
-        this.dmgNumbers.splice(i, 1);
+        // Swap-remove: O(1)
+        const lastD = this.dmgNumbers.length - 1;
+        if (i < lastD) this.dmgNumbers[i] = this.dmgNumbers[lastD];
+        this.dmgNumbers.length = lastD;
         this.dmgPool.release(d);
       }
     }
