@@ -300,7 +300,7 @@ export class Game {
       this.fpsFrames = 0;
       this.fpsAccum = 0;
       if (this.fpsText && this.fpsText.visible) {
-        this.fpsText.text = `FPS:${this.fpsDisplay} E:${this.enemies.length} P:${this.projectiles.length} G:${this.xpGems.length} DC:${this.world.children.length}`;
+        this.fpsText.text = `FPS:${this.fpsDisplay} E:${this.enemies.length} P:${this.projectiles.length} G:${this.xpGems.length} FX:${this.particles.activeCount}`;
         this.fpsText.position.y = this.app.screen.height - 16;
       }
     }
