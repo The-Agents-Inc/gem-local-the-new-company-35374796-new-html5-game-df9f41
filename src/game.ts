@@ -133,7 +133,7 @@ export class Game {
     this.weaponMgr = new WeaponManager(this.world, {
       getPlayerPos: () => ({ x: this.player.x, y: this.player.y }),
       getEnemies: () => this.enemies,
-      spawnProjectile: (x, y, vx, vy, damage, color) => {
+      spawnProjectile: (x, y, vx, vy, damage, _color) => {
         const p = this.projPool.get();
         p.position.set(x, y);
         p.vx = vx;
