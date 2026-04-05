@@ -1065,3 +1065,33 @@ export class CharacterSelectScreen extends Container {
     super.destroy(options);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Leaderboard Screen (stub — to be fleshed out)
+// ---------------------------------------------------------------------------
+export class LeaderboardScreen extends Container {
+  constructor(
+    _saveMgr: SaveManager,
+    screenW: number,
+    _screenH: number,
+    private onClose: (() => void) | null,
+  ) {
+    super();
+    const title = new Text({ text: "Leaderboard", style: new TextStyle({ fontFamily: "monospace", fontSize: 28, fill: 0xffffff, fontWeight: "bold" }) });
+    title.anchor?.set(0.5);
+    title.position.set(screenW / 2, 60);
+    this.addChild(title);
+
+    const closeBtn = new Text({ text: "[Back]", style: new TextStyle({ fontFamily: "monospace", fontSize: 16, fill: 0xaaaaaa }) });
+    closeBtn.position.set(screenW / 2 - 20, _screenH - 60);
+    closeBtn.eventMode = "static";
+    closeBtn.cursor = "pointer";
+    closeBtn.on("pointerdown", () => this.onClose?.());
+    this.addChild(closeBtn);
+  }
+
+  destroy(options?: { children?: boolean }) {
+    this.onClose = null;
+    super.destroy(options);
+  }
+}

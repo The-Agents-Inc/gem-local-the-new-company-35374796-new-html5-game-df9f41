@@ -11,12 +11,10 @@ export interface SpatialEntity {
 }
 
 export class SpatialHash<T extends SpatialEntity> {
-  private cellSize: number;
   private invCellSize: number;
   private buckets = new Map<number, T[]>();
 
   constructor(cellSize = 64) {
-    this.cellSize = cellSize;
     this.invCellSize = 1 / cellSize;
   }
 

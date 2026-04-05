@@ -2,8 +2,8 @@ import { Application, Container, Text, TextStyle } from "pixi.js";
 import { Keyboard } from "./input";
 import { Pool } from "./pool";
 import { Player, Enemy, Projectile, DamageNumber, XpGem } from "./entities";
-import { HUD, RunSummaryScreen, LevelUpScreen, WeaponChoice, UpgradeShopScreen, CharacterSelectScreen } from "./hud";
-import { WeaponManager, WeaponType, FlameZone, LightningEffect } from "./weapons";
+import { HUD, RunSummaryScreen, LevelUpScreen, WeaponChoice, UpgradeShopScreen, CharacterSelectScreen, LeaderboardScreen } from "./hud";
+import { WeaponManager, WeaponType, WEAPON_COLORS, FlameZone, LightningEffect } from "./weapons";
 import { SaveManager } from "./save";
 import { goldPerKill, getUpgradeBonus, UpgradeId } from "./upgrades";
 import { CharacterId, CHARACTER_DEFS } from "./characters";
@@ -425,11 +425,12 @@ export class Game {
           e.hp -= p.damage;
           e.flashDamage();
           this.spawnDmgNumber(p.damage, e.x, e.y - 15);
+          this.spawnWeaponHitParticles(p.weaponType, e.x, e.y, p.vx, p.vy);
 
           this.killProjectile(pi);
 
           if (e.hp <= 0 && e._arrIdx >= 0) {
-            this.killEnemy(e._arrIdx);
+            this.killEnemy(e._arrIdx, p.vx, p.vy);
           }
           break; // projectile used up
         }
@@ -494,8 +495,18 @@ export class Game {
     }
   }
 
-  private killEnemy(index: number) {
+  private killEnemy(index: number, projVx = 0, projVy = 0) {
     const e = this.enemies[index];
+    // Enemy death burst — 10-14 red particles with 30% directional inheritance
+    const inheritVx = projVx * 0.3;
+    const inheritVy = projVy * 0.3;
+    this.particles.burstRadial(
+      e.x, e.y,
+      10 + Math.floor(Math.random() * 5),
+      0xff4466,
+      80, 160, 0.4, 3,
+      inheritVx, inheritVy,
+    );
     // Drop XP gem at enemy position
     this.spawnXpGem(e.x, e.y);
     e.alive = false;
@@ -511,6 +522,26 @@ export class Game {
     this.enemyPool.release(e);
     this.kills++;
     this.runGold += goldPerKill(this.elapsed);
+  }
+
+  // ------- Per-weapon hit particles -------
+  private spawnWeaponHitParticles(weaponType: string, x: number, y: number, vx: number, vy: number) {
+    switch (weaponType) {
+      case WeaponType.PlasmaBolt:
+        // 6-8 yellow radial burst
+        this.particles.burstRadial(x, y, 6 + Math.floor(Math.random() * 3), WEAPON_COLORS[WeaponType.PlasmaBolt], 80, 140, 0.3, 3);
+        break;
+      case WeaponType.ScatterShot: {
+        // 3-4 cyan cone forward per pellet
+        const angle = Math.atan2(vy, vx);
+        this.particles.burstCone(x, y, 3 + Math.floor(Math.random() * 2), WEAPON_COLORS[WeaponType.ScatterShot], angle, 0.6, 60, 100, 0.25, 2);
+        break;
+      }
+      default:
+        // Fallback: small white burst
+        this.particles.burstRadial(x, y, 3, 0xffffff, 40, 80, 0.2, 2);
+        break;
+    }
   }
 
   // ------- XP Gems -------
@@ -551,6 +582,10 @@ export class Game {
           const pullSpeed = 350;
           g.x += (dx / len) * pullSpeed * dt;
           g.y += (dy / len) * pullSpeed * dt;
+          // XP gem magnet trail — 3-5 green particles trailing toward player
+          if (Math.random() < 0.3) {
+            this.particles.trail(g.x, g.y, this.player.x, this.player.y, 1, 0x44ff88, 200, 0.25, 2);
+          }
         }
       }
 
@@ -560,6 +595,14 @@ export class Game {
         const levelsGained = this.player.addXp(Math.round(g.xpValue * xpMultiplier));
         if (levelsGained > 0) {
           this.pendingLevelUps += levelsGained;
+          // Level-up ring — 20-30 particles in circle outward, white→yellow
+          this.particles.burstRing(
+            this.player.x, this.player.y,
+            20 + Math.floor(Math.random() * 11),
+            0xffee55, 200, 300, 0.5, 3,
+          );
+          // Screen flash — white, 0.15s
+          this.screenFlash.flash(0xffffff, 0.3, 0.15, this.app.screen.width, this.app.screen.height);
           this.showLevelUpScreen();
         }
         g.alive = false;
@@ -664,7 +707,9 @@ export class Game {
   // ------- Damage numbers -------
   private spawnDmgNumber(dmg: number, x: number, y: number) {
     const d = this.dmgPool.get();
-    d.init(dmg, x, y);
+    // Random X spread (±15px) to prevent stacking
+    const spreadX = (Math.random() - 0.5) * 30;
+    d.init(dmg, x + spreadX, y);
     this.dmgNumbers.push(d);
   }
 
@@ -828,6 +873,9 @@ export class Game {
     }
     this.lightningEffects.length = 0;
 
+    // Clear particles
+    this.particles.clearAll();
+
     // Reset weapons and re-add default
     this.weaponMgr.reset();
     this.weaponMgr.addWeapon(WeaponType.PlasmaBolt);
@@ -925,7 +973,7 @@ export class Game {
   }
 
   // ------- Passives -------
-  private updatePassives(dt: number) {
+  private updatePassives(_dt: number) {
     // Nova: Adaptive Shield — after 4s without damage, gain shield = 10% maxHp
     if (this.activeCharId === CharacterId.Nova) {
       const timeSinceDmg = this.elapsed - this.lastDamageTime;
