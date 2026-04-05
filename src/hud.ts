@@ -715,3 +715,306 @@ export class UpgradeShopScreen extends Container {
     super.destroy(options);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Character Select Screen — pre-run character picker
+// ---------------------------------------------------------------------------
+const CHAR_SELECT_TITLE = new TextStyle({
+  fontFamily: "monospace",
+  fontSize: 36,
+  fill: 0x55ffaa,
+  fontWeight: "bold",
+});
+
+const CHAR_NAME_STYLE = new TextStyle({
+  fontFamily: "monospace",
+  fontSize: 22,
+  fill: 0xffffff,
+  fontWeight: "bold",
+});
+
+const CHAR_TITLE_STYLE = new TextStyle({
+  fontFamily: "monospace",
+  fontSize: 11,
+  fill: 0xaaaaaa,
+  wordWrap: true,
+  wordWrapWidth: 180,
+});
+
+const CHAR_STAT_STYLE = new TextStyle({
+  fontFamily: "monospace",
+  fontSize: 12,
+  fill: 0xcccccc,
+});
+
+const PASSIVE_NAME_STYLE = new TextStyle({
+  fontFamily: "monospace",
+  fontSize: 13,
+  fill: 0xffcc33,
+  fontWeight: "bold",
+});
+
+const PASSIVE_DESC_STYLE = new TextStyle({
+  fontFamily: "monospace",
+  fontSize: 11,
+  fill: 0xccccaa,
+  wordWrap: true,
+  wordWrapWidth: 170,
+});
+
+export class CharacterSelectScreen extends Container {
+  private onSelect: ((charId: CharacterId) => void) | null = null;
+  private saveMgr: SaveManager;
+  private cardContainer: Container;
+  private goldDisplay: Text;
+  private screenW: number;
+  private screenH: number;
+
+  constructor(
+    saveMgr: SaveManager,
+    screenWidth: number,
+    screenHeight: number,
+    onSelectCallback: (charId: CharacterId) => void,
+  ) {
+    super();
+    this.saveMgr = saveMgr;
+    this.onSelect = onSelectCallback;
+    this.screenW = screenWidth;
+    this.screenH = screenHeight;
+
+    // Full-screen overlay
+    const overlay = new Graphics()
+      .rect(0, 0, screenWidth, screenHeight)
+      .fill({ color: 0x0a0a1e, alpha: 0.95 });
+    this.addChild(overlay);
+
+    // Title
+    const title = new Text({ text: "SELECT CHARACTER", style: CHAR_SELECT_TITLE });
+    title.anchor.set(0.5, 0);
+    title.position.set(screenWidth / 2, 30);
+    this.addChild(title);
+
+    // Gold display
+    this.goldDisplay = new Text({
+      text: `Gold: ${saveMgr.save.gold}`,
+      style: new TextStyle({ fontFamily: "monospace", fontSize: 18, fill: 0xffcc33 }),
+    });
+    this.goldDisplay.anchor.set(0.5, 0);
+    this.goldDisplay.position.set(screenWidth / 2, 72);
+    this.addChild(this.goldDisplay);
+
+    // Character cards
+    this.cardContainer = new Container();
+    this.addChild(this.cardContainer);
+    this.rebuildCards();
+  }
+
+  private rebuildCards() {
+    this.cardContainer.removeChildren();
+    this.goldDisplay.text = `Gold: ${this.saveMgr.save.gold}`;
+
+    const chars = ALL_CHARACTERS;
+    const cardW = 200;
+    const cardH = 320;
+    const gap = 20;
+    const totalW = chars.length * cardW + (chars.length - 1) * gap;
+    const startX = (this.screenW - totalW) / 2;
+    const cardY = 105;
+
+    for (let i = 0; i < chars.length; i++) {
+      const def = chars[i];
+      const x = startX + i * (cardW + gap);
+      const card = this.buildCharCard(def, x, cardY, cardW, cardH);
+      this.cardContainer.addChild(card);
+    }
+  }
+
+  private buildCharCard(def: CharacterDef, x: number, y: number, w: number, h: number): Container {
+    const card = new Container();
+    card.position.set(x, y);
+
+    const unlocked = this.saveMgr.isCharacterUnlocked(def.id);
+    const selected = this.saveMgr.save.selectedCharacter === def.id;
+    const canAfford = this.saveMgr.save.gold >= def.unlockCost;
+
+    const borderColor = selected ? 0x55ffaa : (unlocked ? def.color : (canAfford ? 0xffcc33 : 0x444444));
+
+    // Background
+    const bg = new Graphics()
+      .roundRect(0, 0, w, h, 12)
+      .fill({ color: selected ? 0x1a2e1a : 0x12122a })
+      .roundRect(0, 0, w, h, 12)
+      .stroke({ color: borderColor, width: selected ? 3 : 2 });
+    card.addChild(bg);
+
+    // Character icon (simple shape)
+    const iconY = 40;
+    const icon = new Graphics()
+      .circle(w / 2, iconY, 28)
+      .fill({ color: def.color, alpha: unlocked ? 0.3 : 0.1 })
+      .circle(w / 2, iconY, 16)
+      .fill({ color: def.color, alpha: unlocked ? 1 : 0.3 });
+    card.addChild(icon);
+
+    // Name
+    const name = new Text({
+      text: def.name,
+      style: new TextStyle({
+        fontFamily: "monospace",
+        fontSize: 22,
+        fill: unlocked ? 0xffffff : 0x666666,
+        fontWeight: "bold",
+      }),
+    });
+    name.anchor.set(0.5, 0);
+    name.position.set(w / 2, iconY + 34);
+    card.addChild(name);
+
+    // Title/flavor
+    const title = new Text({
+      text: def.title,
+      style: new TextStyle({
+        fontFamily: "monospace",
+        fontSize: 11,
+        fill: unlocked ? 0xaaaaaa : 0x555555,
+        wordWrap: true,
+        wordWrapWidth: w - 30,
+      }),
+    });
+    title.anchor.set(0.5, 0);
+    title.position.set(w / 2, iconY + 60);
+    card.addChild(title);
+
+    // Stats
+    let statY = iconY + 95;
+    const stats = [
+      { label: "HP", value: `${def.baseHp}`, color: 0xff4466 },
+      { label: "Speed", value: `${def.baseSpeed}`, color: 0x55ccff },
+      { label: "Weapon", value: WEAPON_NAMES[def.startingWeapon], color: WEAPON_COLORS[def.startingWeapon] },
+    ];
+    for (const s of stats) {
+      const lbl = new Text({
+        text: `${s.label}: `,
+        style: new TextStyle({ fontFamily: "monospace", fontSize: 12, fill: 0x888888 }),
+      });
+      lbl.position.set(15, statY);
+      card.addChild(lbl);
+
+      const val = new Text({
+        text: s.value,
+        style: new TextStyle({ fontFamily: "monospace", fontSize: 12, fill: unlocked ? s.color : 0x555555 }),
+      });
+      val.position.set(80, statY);
+      card.addChild(val);
+      statY += 18;
+    }
+
+    // Passive
+    statY += 6;
+    const passiveLbl = new Text({
+      text: def.passiveName,
+      style: new TextStyle({
+        fontFamily: "monospace",
+        fontSize: 13,
+        fill: unlocked ? 0xffcc33 : 0x555533,
+        fontWeight: "bold",
+      }),
+    });
+    passiveLbl.position.set(15, statY);
+    card.addChild(passiveLbl);
+
+    const passiveDesc = new Text({
+      text: def.passiveDesc,
+      style: new TextStyle({
+        fontFamily: "monospace",
+        fontSize: 11,
+        fill: unlocked ? 0xccccaa : 0x444422,
+        wordWrap: true,
+        wordWrapWidth: w - 30,
+      }),
+    });
+    passiveDesc.position.set(15, statY + 18);
+    card.addChild(passiveDesc);
+
+    // Action button
+    const btnY = h - 45;
+    if (unlocked) {
+      if (selected) {
+        // Currently selected — show "SELECTED" label + "START" button
+        const selLabel = new Text({
+          text: "SELECTED",
+          style: new TextStyle({ fontFamily: "monospace", fontSize: 12, fill: 0x55ffaa }),
+        });
+        selLabel.anchor.set(0.5, 0);
+        selLabel.position.set(w / 2, btnY - 16);
+        card.addChild(selLabel);
+
+        const startBtn = this.buildActionBtn("START RUN", w / 2, btnY + 8, 0x55ffaa, 0x1a2e1a, w - 30, () => {
+          if (this.onSelect) this.onSelect(def.id);
+        });
+        card.addChild(startBtn);
+      } else {
+        // Unlocked but not selected — "SELECT" button
+        const selectBtn = this.buildActionBtn("SELECT", w / 2, btnY, def.color, 0x1a1a2e, w - 30, () => {
+          this.saveMgr.selectCharacter(def.id);
+          this.rebuildCards();
+        });
+        card.addChild(selectBtn);
+      }
+    } else {
+      // Locked — show unlock cost
+      if (canAfford) {
+        const unlockBtn = this.buildActionBtn(`UNLOCK (${def.unlockCost}g)`, w / 2, btnY, 0xffcc33, 0x2a1a4e, w - 30, () => {
+          if (this.saveMgr.unlockCharacter(def.id, def.unlockCost)) {
+            this.saveMgr.selectCharacter(def.id);
+            this.rebuildCards();
+          }
+        });
+        card.addChild(unlockBtn);
+      } else {
+        // Can't afford
+        const lockLabel = new Text({
+          text: `LOCKED (${def.unlockCost}g)`,
+          style: new TextStyle({ fontFamily: "monospace", fontSize: 13, fill: 0x555555 }),
+        });
+        lockLabel.anchor.set(0.5, 0);
+        lockLabel.position.set(w / 2, btnY);
+        card.addChild(lockLabel);
+      }
+    }
+
+    return card;
+  }
+
+  private buildActionBtn(label: string, x: number, y: number, accent: number, bgColor: number, width: number, handler: () => void): Container {
+    const btn = new Container();
+    btn.position.set(x, y);
+    btn.eventMode = "static";
+    btn.cursor = "pointer";
+
+    const halfW = width / 2;
+    const bgGfx = new Graphics()
+      .roundRect(-halfW, -14, width, 28, 6)
+      .fill({ color: bgColor })
+      .roundRect(-halfW, -14, width, 28, 6)
+      .stroke({ color: accent, width: 2 });
+    btn.addChild(bgGfx);
+
+    const txt = new Text({
+      text: label,
+      style: new TextStyle({ fontFamily: "monospace", fontSize: 13, fill: accent, fontWeight: "bold" }),
+    });
+    txt.anchor.set(0.5);
+    btn.addChild(txt);
+
+    btn.on("pointerover", () => { bgGfx.tint = 0xcccccc; });
+    btn.on("pointerout", () => { bgGfx.tint = 0xffffff; });
+    btn.on("pointerdown", handler);
+    return btn;
+  }
+
+  destroy(options?: { children?: boolean }) {
+    this.onSelect = null;
+    super.destroy(options);
+  }
+}

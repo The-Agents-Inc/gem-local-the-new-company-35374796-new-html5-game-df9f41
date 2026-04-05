@@ -2,10 +2,11 @@ import { Application, Container } from "pixi.js";
 import { Keyboard } from "./input";
 import { Pool } from "./pool";
 import { Player, Enemy, Projectile, DamageNumber, XpGem } from "./entities";
-import { HUD, RunSummaryScreen, LevelUpScreen, WeaponChoice, UpgradeShopScreen } from "./hud";
+import { HUD, RunSummaryScreen, LevelUpScreen, WeaponChoice, UpgradeShopScreen, CharacterSelectScreen } from "./hud";
 import { WeaponManager, WeaponType, FlameZone, LightningEffect } from "./weapons";
 import { SaveManager } from "./save";
 import { goldPerKill, getUpgradeBonus, UpgradeId } from "./upgrades";
+import { CharacterId, CHARACTER_DEFS } from "./characters";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -63,6 +64,7 @@ export class Game {
   private runSummaryScreen: RunSummaryScreen | null = null;
   private levelUpScreen: LevelUpScreen | null = null;
   private upgradeShopScreen: UpgradeShopScreen | null = null;
+  private charSelectScreen: CharacterSelectScreen | null = null;
 
   // Persistence
   private saveMgr: SaveManager;
@@ -77,6 +79,13 @@ export class Game {
   private paused = false; // true during level-up selection
   private pendingLevelUps = 0; // queued level-ups
   private runGold = 0; // gold accumulated this run
+  private waitingForCharSelect = true; // show char select before first run
+  private activeCharId: CharacterId = CharacterId.Nova;
+
+  // Passive state — Nova: Adaptive Shield
+  private lastDamageTime = 0;
+  private shieldHp = 0;
+  private shieldActive = false;
 
   constructor(app: Application) {
     this.app = app;
@@ -173,28 +182,19 @@ export class Game {
         }
       },
     });
-    // Start with PlasmaBolt as default weapon
-    this.weaponMgr.addWeapon(WeaponType.PlasmaBolt);
-
     // HUD
     this.hud = new HUD();
     this.hudLayer.addChild(this.hud);
 
-    // Restart listeners
-    window.addEventListener("keydown", (e) => {
-      if (this.gameOver && e.code === "Space") this.restartQueued = true;
-    });
-    app.stage.eventMode = "static";
-    app.stage.hitArea = app.screen;
-    app.stage.on("pointerdown", () => {
-      if (this.gameOver) this.restartQueued = true;
-    });
+    // Show character select on startup
+    this.showCharacterSelect();
   }
 
   // Called every frame by app.ticker
   update(ticker: { deltaTime: number }) {
+    if (this.waitingForCharSelect) return;
     if (this.restartQueued) {
-      this.restart();
+      this.showCharacterSelect();
       return;
     }
     if (this.gameOver) {
@@ -210,6 +210,7 @@ export class Game {
     this.elapsed += dt;
 
     this.updatePlayer(dt);
+    this.updatePassives(dt);
     this.weaponMgr.update(dt);
     this.updateProjectiles(dt);
     this.updateEnemies(dt);
@@ -360,12 +361,42 @@ export class Game {
         )
       ) {
         const armorReduction = 1 - getUpgradeBonus(this.saveMgr, UpgradeId.Armor) / 100;
-        this.player.hp -= Math.max(1, Math.round(e.damage * armorReduction));
+        let incomingDmg = Math.max(1, Math.round(e.damage * armorReduction));
+
+        // Nova passive: Adaptive Shield absorbs damage
+        if (this.shieldActive && this.shieldHp > 0) {
+          const absorbed = Math.min(this.shieldHp, incomingDmg);
+          this.shieldHp -= absorbed;
+          incomingDmg -= absorbed;
+          if (this.shieldHp <= 0) {
+            this.shieldActive = false;
+            this.shieldHp = 0;
+          }
+        }
+
+        if (incomingDmg > 0) {
+          this.player.hp -= incomingDmg;
+        }
+        this.lastDamageTime = this.elapsed;
         this.player.invulnTimer = 0.3;
         this.player.drawHpBar();
         this.player.flashDamage();
         e.contactTimer = e.contactCooldown;
         this.spawnDmgNumber(e.damage, this.player.x, this.player.y - 20);
+
+        // Aegis passive: Thorns — reflect damage back to enemy
+        if (this.activeCharId === CharacterId.Aegis) {
+          const armorTier = this.saveMgr.getUpgradeTier(UpgradeId.Armor);
+          const thornsDmg = 15 + armorTier * 5;
+          e.hp -= thornsDmg;
+          e.flashDamage();
+          this.spawnDmgNumber(thornsDmg, e.x, e.y - 15);
+          if (e.hp <= 0) {
+            const idx = this.enemies.indexOf(e);
+            if (idx >= 0) this.killEnemy(idx);
+          }
+        }
+
         break; // one hit per frame
       }
     }
