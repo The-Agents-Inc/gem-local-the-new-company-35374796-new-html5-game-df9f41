@@ -1,8 +1,8 @@
 import { Application, Container } from "pixi.js";
 import { Keyboard } from "./input";
 import { Pool } from "./pool";
-import { Player, Enemy, Projectile, DamageNumber } from "./entities";
-import { HUD, GameOverScreen } from "./hud";
+import { Player, Enemy, Projectile, DamageNumber, XpGem } from "./entities";
+import { HUD, GameOverScreen, LevelUpScreen, pickRandomAbilities, Ability } from "./hud";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -40,15 +40,18 @@ export class Game {
   private enemies: Enemy[] = [];
   private projectiles: Projectile[] = [];
   private dmgNumbers: DamageNumber[] = [];
+  private xpGems: XpGem[] = [];
 
   // Pools
   private enemyPool: Pool<Enemy>;
   private projPool: Pool<Projectile>;
   private dmgPool: Pool<DamageNumber>;
+  private gemPool: Pool<XpGem>;
 
   // HUD
   private hud: HUD;
   private gameOverScreen: GameOverScreen | null = null;
+  private levelUpScreen: LevelUpScreen | null = null;
 
   // State
   private kills = 0;
@@ -57,6 +60,8 @@ export class Game {
   private spawnInterval = 1.5; // seconds between spawns, decreases over time
   private gameOver = false;
   private restartQueued = false;
+  private paused = false; // true during level-up selection
+  private pendingLevelUps = 0; // queued level-ups
 
   constructor(app: Application) {
     this.app = app;

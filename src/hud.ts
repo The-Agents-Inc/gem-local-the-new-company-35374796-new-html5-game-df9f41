@@ -144,6 +144,109 @@ export class HUD extends Container {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Level Up Screen — 3 ability cards, click/tap to select
+// ---------------------------------------------------------------------------
+const CARD_STYLE = new TextStyle({ fontFamily: "monospace", fontSize: 22, fill: 0xffffff, fontWeight: "bold" });
+const CARD_DESC_STYLE = new TextStyle({ fontFamily: "monospace", fontSize: 14, fill: 0xcccccc, wordWrap: true, wordWrapWidth: 140 });
+const LEVEL_TITLE_STYLE = new TextStyle({ fontFamily: "monospace", fontSize: 36, fill: 0x55ffaa, fontWeight: "bold" });
+
+export class LevelUpScreen extends Container {
+  private onSelect: ((ability: Ability) => void) | null = null;
+
+  constructor(abilities: Ability[], screenWidth: number, screenHeight: number, callback: (ability: Ability) => void) {
+    super();
+    this.onSelect = callback;
+
+    // Dim overlay
+    const overlay = new Graphics()
+      .rect(0, 0, screenWidth, screenHeight)
+      .fill({ color: 0x000000, alpha: 0.75 });
+    this.addChild(overlay);
+
+    // Title
+    const title = new Text({ text: "LEVEL UP!", style: LEVEL_TITLE_STYLE });
+    title.anchor.set(0.5);
+    title.position.set(screenWidth / 2, screenHeight * 0.2);
+    this.addChild(title);
+
+    const subtitle = new Text({ text: "Choose an upgrade", style: SUB_STYLE });
+    subtitle.anchor.set(0.5);
+    subtitle.position.set(screenWidth / 2, screenHeight * 0.2 + 44);
+    this.addChild(subtitle);
+
+    // Cards
+    const cardW = 160;
+    const cardH = 200;
+    const gap = 24;
+    const totalW = abilities.length * cardW + (abilities.length - 1) * gap;
+    const startX = (screenWidth - totalW) / 2;
+    const cardY = screenHeight * 0.42;
+
+    for (let i = 0; i < abilities.length; i++) {
+      const ab = abilities[i];
+      const cx = startX + i * (cardW + gap);
+      const card = this.buildCard(ab, cx, cardY, cardW, cardH);
+      this.addChild(card);
+    }
+  }
+
+  private buildCard(ab: Ability, x: number, y: number, w: number, h: number): Container {
+    const card = new Container();
+    card.position.set(x, y);
+    card.eventMode = "static";
+    card.cursor = "pointer";
+
+    // Card background
+    const bg = new Graphics()
+      .roundRect(0, 0, w, h, 12)
+      .fill({ color: 0x1a1a2e })
+      .roundRect(0, 0, w, h, 12)
+      .stroke({ color: ab.color, width: 2 });
+    card.addChild(bg);
+
+    // Icon circle
+    const icon = new Graphics()
+      .circle(w / 2, 40, 20)
+      .fill({ color: ab.color, alpha: 0.3 })
+      .circle(w / 2, 40, 12)
+      .fill({ color: ab.color });
+    card.addChild(icon);
+
+    // Name
+    const name = new Text({ text: ab.name, style: CARD_STYLE });
+    name.anchor.set(0.5, 0);
+    name.position.set(w / 2, 70);
+    card.addChild(name);
+
+    // Description
+    const desc = new Text({ text: ab.description, style: CARD_DESC_STYLE });
+    desc.anchor.set(0.5, 0);
+    desc.position.set(w / 2, 105);
+    card.addChild(desc);
+
+    // Hover effect
+    card.on("pointerover", () => { bg.tint = 0xcccccc; });
+    card.on("pointerout", () => { bg.tint = 0xffffff; });
+
+    // Click to select
+    card.on("pointerdown", () => {
+      if (this.onSelect) {
+        const cb = this.onSelect;
+        this.onSelect = null; // prevent double-select
+        cb(ab);
+      }
+    });
+
+    return card;
+  }
+
+  destroy(options?: { children?: boolean }) {
+    this.onSelect = null;
+    super.destroy(options);
+  }
+}
+
 export class GameOverScreen extends Container {
   constructor(kills: number, elapsed: number) {
     super();
