@@ -1,4 +1,4 @@
-import { Container, Graphics } from "pixi.js";
+import { Container, Graphics, Text, TextStyle } from "pixi.js";
 
 // ---------------------------------------------------------------------------
 // Shared health component
@@ -12,15 +12,31 @@ export interface HasHealth {
 // ---------------------------------------------------------------------------
 // Player
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// XP level curve: XP needed to reach level N (1-indexed, level 1 = 0 XP)
+// ---------------------------------------------------------------------------
+export function xpForLevel(level: number): number {
+  if (level <= 1) return 0;
+  // Quadratic curve: each level requires progressively more XP
+  return Math.floor(10 * (level - 1) * (level - 1) + 10 * (level - 1));
+}
+
 export class Player extends Container implements HasHealth {
   hp: number;
   maxHp: number;
   invulnTimer = 0;
 
-  readonly speed = 200; // px/s
+  speed = 200; // px/s (mutable for upgrades)
   readonly radius = 14;
-  readonly attackCooldown = 0.35; // seconds between shots
+  attackCooldown = 0.35; // seconds between shots (mutable for upgrades)
   attackTimer = 0;
+  projectileDamage = 12; // base projectile damage (mutable for upgrades)
+  projectileCount = 1; // number of projectiles per shot (mutable for upgrades)
+  pickupRadius = 60; // magnet range for XP gems (mutable for upgrades)
+
+  // XP / Level
+  xp = 0;
+  level = 1;
 
   private body: Graphics;
   private hpBar: Graphics;
@@ -64,6 +80,23 @@ export class Player extends Container implements HasHealth {
     setTimeout(() => {
       this.body.tint = 0xffffff;
     }, 100);
+  }
+
+  /** Returns number of levels gained */
+  addXp(amount: number): number {
+    this.xp += amount;
+    let levelsGained = 0;
+    while (this.xp >= xpForLevel(this.level + 1)) {
+      this.level++;
+      levelsGained++;
+    }
+    return levelsGained;
+  }
+
+  get xpProgress(): number {
+    const currentLevelXp = xpForLevel(this.level);
+    const nextLevelXp = xpForLevel(this.level + 1);
+    return (this.xp - currentLevelXp) / (nextLevelXp - currentLevelXp);
   }
 }
 
@@ -137,6 +170,43 @@ export class Projectile extends Container {
     this.alive = true;
     this.visible = true;
     this.lifetime = 0;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// XP Gem — dropped by enemies, collected by player
+// ---------------------------------------------------------------------------
+export class XpGem extends Container {
+  readonly radius = 6;
+  readonly xpValue = 5;
+  alive = true;
+  // Slight scatter velocity on spawn
+  vx = 0;
+  vy = 0;
+  friction = 4; // deceleration multiplier
+
+  private body: Graphics;
+
+  constructor() {
+    super();
+    // Diamond shape in green/cyan
+    this.body = new Graphics()
+      .poly([
+        { x: 0, y: -7 },
+        { x: 5, y: 0 },
+        { x: 0, y: 7 },
+        { x: -5, y: 0 },
+      ])
+      .fill({ color: 0x55ffaa });
+    this.addChild(this.body);
+  }
+
+  resetGem() {
+    this.alive = true;
+    this.visible = true;
+    this.alpha = 1;
+    this.vx = 0;
+    this.vy = 0;
   }
 }
 
