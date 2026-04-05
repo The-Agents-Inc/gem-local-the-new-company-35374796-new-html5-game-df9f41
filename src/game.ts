@@ -589,7 +589,6 @@ export class Game {
     this.player.maxHp = 100;
     this.player.hp = this.player.maxHp;
     this.player.invulnTimer = 0;
-    this.player.attackTimer = 0;
     this.player.pickupRadius = 60;
     this.player.xp = 0;
     this.player.level = 1;
