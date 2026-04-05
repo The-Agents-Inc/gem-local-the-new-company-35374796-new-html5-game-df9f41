@@ -1,4 +1,4 @@
-import { Application, Container } from "pixi.js";
+import { Application, Container, Text, TextStyle } from "pixi.js";
 import { Keyboard } from "./input";
 import { Pool } from "./pool";
 import { Player, Enemy, Projectile, DamageNumber, XpGem } from "./entities";
@@ -7,6 +7,7 @@ import { WeaponManager, WeaponType, FlameZone, LightningEffect } from "./weapons
 import { SaveManager } from "./save";
 import { goldPerKill, getUpgradeBonus, UpgradeId } from "./upgrades";
 import { CharacterId, CHARACTER_DEFS } from "./characters";
+import { SpatialHash } from "./spatial";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -87,6 +88,23 @@ export class Game {
   private lastDamageTime = 0;
   private shieldHp = 0;
   private shieldActive = false;
+
+  // Spatial hash for broad-phase collision
+  private enemyGrid = new SpatialHash<Enemy>(64);
+  // Reusable query buffer to avoid per-frame allocations
+  private queryBuf: Enemy[] = [];
+
+  // Enemy count cap — prevents late-game runaway
+  private readonly MAX_ENEMIES = 300;
+
+  // Off-screen cull distance squared (entities beyond this are recycled)
+  private readonly CULL_DIST_SQ = 1600 * 1600;
+
+  // FPS / debug overlay
+  private fpsText: Text | null = null;
+  private fpsAccum = 0;
+  private fpsFrames = 0;
+  private fpsDisplay = 0;
 
   constructor(app: Application) {
     this.app = app;

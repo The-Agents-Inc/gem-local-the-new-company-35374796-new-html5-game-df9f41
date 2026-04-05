@@ -372,10 +372,23 @@ export class RunSummaryScreen extends Container {
       return `${m}:${s}`;
     };
 
+    // New high score callout
+    if (data.isNewHighScore) {
+      const hsText = new Text({
+        text: "NEW HIGH SCORE!",
+        style: new TextStyle({ fontFamily: "monospace", fontSize: 28, fill: 0xffcc33, fontWeight: "bold" }),
+      });
+      hsText.anchor.set(0.5, 0);
+      hsText.position.set(cx, y);
+      this.addChild(hsText);
+      y += 40;
+    }
+
     const rows = [
-      { label: "TIME SURVIVED", target: data.elapsed, format: timeFmt, delay: 0.2 },
-      { label: "ENEMIES KILLED", target: data.kills, format: (v: number) => `${v}`, delay: 0.5 },
-      { label: "LEVEL REACHED", target: data.level, format: (v: number) => `${v}`, delay: 0.8 },
+      { label: "SCORE", target: data.score, format: (v: number) => `${v}`, delay: 0.1 },
+      { label: "TIME SURVIVED", target: data.elapsed, format: timeFmt, delay: 0.3 },
+      { label: "ENEMIES KILLED", target: data.kills, format: (v: number) => `${v}`, delay: 0.6 },
+      { label: "LEVEL REACHED", target: data.level, format: (v: number) => `${v}`, delay: 0.9 },
     ];
 
     for (const r of rows) {
