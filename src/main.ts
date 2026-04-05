@@ -1,4 +1,5 @@
 import { Application } from "pixi.js";
+import { Game } from "./game";
 
 async function init() {
   const app = new Application();
@@ -11,7 +12,8 @@ async function init() {
 
   document.body.appendChild(app.canvas);
 
-  console.log("Void Survivors — PixiJS", app.renderer.type);
+  const game = new Game(app);
+  app.ticker.add((ticker) => game.update(ticker));
 }
 
 init();
