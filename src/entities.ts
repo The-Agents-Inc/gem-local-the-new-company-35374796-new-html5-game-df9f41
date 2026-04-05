@@ -1,4 +1,4 @@
-import { Container, Graphics, Text, TextStyle } from "pixi.js";
+import { Container, Graphics } from "pixi.js";
 
 // ---------------------------------------------------------------------------
 // Shared health component
@@ -153,7 +153,7 @@ export class Projectile extends Container {
   vy = 0;
   readonly speed = 450; // px/s
   readonly radius = 4;
-  readonly damage = 12;
+  damage = 12;
   alive = true;
   lifetime = 0;
   readonly maxLifetime = 1.5; // seconds
@@ -170,6 +170,11 @@ export class Projectile extends Container {
     this.alive = true;
     this.visible = true;
     this.lifetime = 0;
+  }
+
+  configure(damage: number, color: number) {
+    this.damage = damage;
+    this.body.clear().circle(0, 0, this.radius).fill({ color });
   }
 }
 

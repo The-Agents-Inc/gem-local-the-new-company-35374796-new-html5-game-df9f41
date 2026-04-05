@@ -2,7 +2,8 @@ import { Application, Container } from "pixi.js";
 import { Keyboard } from "./input";
 import { Pool } from "./pool";
 import { Player, Enemy, Projectile, DamageNumber, XpGem } from "./entities";
-import { HUD, GameOverScreen, LevelUpScreen, pickRandomAbilities, Ability } from "./hud";
+import { HUD, GameOverScreen, LevelUpScreen, WeaponChoice } from "./hud";
+import { WeaponManager, WeaponType, FlameZone, LightningEffect } from "./weapons";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -47,6 +48,13 @@ export class Game {
   private projPool: Pool<Projectile>;
   private dmgPool: Pool<DamageNumber>;
   private gemPool: Pool<XpGem>;
+
+  // Weapons
+  private weaponMgr!: WeaponManager;
+  private flameZones: FlameZone[] = [];
+  private lightningEffects: LightningEffect[] = [];
+  private flamePool!: Pool<FlameZone>;
+  private lightningPool!: Pool<LightningEffect>;
 
   // HUD
   private hud: HUD;
@@ -102,6 +110,61 @@ export class Game {
       (_d) => {},
     );
 
+    this.gemPool = new Pool(
+      () => {
+        const g = new XpGem();
+        this.world.addChild(g);
+        return g;
+      },
+      (g) => g.resetGem(),
+    );
+
+    // Extra entity pools
+    this.flamePool = new Pool(
+      () => { const f = new FlameZone(); this.world.addChild(f); return f; },
+      () => {},
+    );
+    this.lightningPool = new Pool(
+      () => { const l = new LightningEffect(); this.world.addChild(l); return l; },
+      () => {},
+    );
+
+    // Weapon manager
+    this.weaponMgr = new WeaponManager(this.world, {
+      getPlayerPos: () => ({ x: this.player.x, y: this.player.y }),
+      getEnemies: () => this.enemies,
+      spawnProjectile: (x, y, vx, vy, damage, color) => {
+        const p = this.projPool.get();
+        p.position.set(x, y);
+        p.vx = vx;
+        p.vy = vy;
+        p.damage = damage;
+        p.rotation = Math.atan2(vy, vx);
+        this.projectiles.push(p);
+      },
+      spawnFlameZone: (x, y, damage, radius, duration) => {
+        const f = this.flamePool.get();
+        f.configure(x, y, damage, radius, duration);
+        this.flameZones.push(f);
+      },
+      spawnLightning: (points) => {
+        const l = this.lightningPool.get();
+        l.drawChain(points);
+        this.lightningEffects.push(l);
+      },
+      damageEnemy: (enemy, damage) => {
+        enemy.hp -= damage;
+        enemy.flashDamage();
+        this.spawnDmgNumber(damage, enemy.x, enemy.y - 15);
+        if (enemy.hp <= 0) {
+          const idx = this.enemies.indexOf(enemy);
+          if (idx >= 0) this.killEnemy(idx);
+        }
+      },
+    });
+    // Start with PlasmaBolt as default weapon
+    this.weaponMgr.addWeapon(WeaponType.PlasmaBolt);
+
     // HUD
     this.hud = new HUD();
     this.hudLayer.addChild(this.hud);
@@ -124,21 +187,26 @@ export class Game {
       return;
     }
     if (this.gameOver) return;
+    if (this.paused) return; // paused during level-up selection
 
     const dt = ticker.deltaTime / 60; // convert frame-delta to seconds
 
     this.elapsed += dt;
 
     this.updatePlayer(dt);
-    this.updateAutoAttack(dt);
+    this.weaponMgr.update(dt);
     this.updateProjectiles(dt);
     this.updateEnemies(dt);
     this.checkProjectileEnemyCollisions();
     this.checkEnemyPlayerCollisions();
+    this.updateXpGems(dt);
+    this.updateFlameZones(dt);
+    this.updateLightningEffects(dt);
     this.updateDamageNumbers(dt);
     this.updateSpawner(dt);
     this.updateCamera();
-    this.hud.update(this.player.hp, this.player.maxHp, this.kills, this.elapsed);
+    const ownedWeapons = this.weaponMgr.weapons.map(w => ({ type: w.type, level: w.level }));
+    this.hud.update(this.player.hp, this.player.maxHp, this.kills, this.elapsed, this.player.level, this.player.xpProgress, this.app.screen.width, this.app.screen.height, ownedWeapons);
 
     if (this.player.hp <= 0) {
       this.triggerGameOver();
@@ -176,40 +244,6 @@ export class Game {
     } else {
       this.player.alpha = 1;
     }
-  }
-
-  // ------- Auto-attack: fire at nearest enemy -------
-  private updateAutoAttack(dt: number) {
-    this.player.attackTimer -= dt;
-    if (this.player.attackTimer > 0) return;
-
-    // Find nearest enemy
-    let nearest: Enemy | null = null;
-    let nearestDist = Infinity;
-    for (const e of this.enemies) {
-      if (!e.alive) continue;
-      const d = dist2(this.player.x, this.player.y, e.x, e.y);
-      if (d < nearestDist) {
-        nearestDist = d;
-        nearest = e;
-      }
-    }
-
-    // Only fire if an enemy exists within range (500px)
-    if (!nearest || nearestDist > 500 * 500) return;
-
-    this.player.attackTimer = this.player.attackCooldown;
-
-    const proj = this.projPool.get();
-    proj.position.set(this.player.x, this.player.y);
-    const angle = Math.atan2(
-      nearest.y - this.player.y,
-      nearest.x - this.player.x,
-    );
-    proj.vx = Math.cos(angle) * proj.speed;
-    proj.vy = Math.sin(angle) * proj.speed;
-    proj.rotation = angle;
-    this.projectiles.push(proj);
   }
 
   // ------- Projectile update -------
@@ -322,11 +356,148 @@ export class Game {
 
   private killEnemy(index: number) {
     const e = this.enemies[index];
+    // Drop XP gem at enemy position
+    this.spawnXpGem(e.x, e.y);
     e.alive = false;
     e.visible = false;
     this.enemies.splice(index, 1);
     this.enemyPool.release(e);
     this.kills++;
+  }
+
+  // ------- XP Gems -------
+  private spawnXpGem(x: number, y: number) {
+    const gem = this.gemPool.get();
+    gem.position.set(x, y);
+    // Small random scatter
+    const angle = Math.random() * Math.PI * 2;
+    const force = 30 + Math.random() * 50;
+    gem.vx = Math.cos(angle) * force;
+    gem.vy = Math.sin(angle) * force;
+    this.xpGems.push(gem);
+  }
+
+  private updateXpGems(dt: number) {
+    const pr2 = this.player.pickupRadius * this.player.pickupRadius;
+
+    for (let i = this.xpGems.length - 1; i >= 0; i--) {
+      const g = this.xpGems[i];
+
+      // Apply scatter velocity with friction
+      if (Math.abs(g.vx) > 0.5 || Math.abs(g.vy) > 0.5) {
+        g.x += g.vx * dt;
+        g.y += g.vy * dt;
+        g.vx *= Math.max(0, 1 - g.friction * dt);
+        g.vy *= Math.max(0, 1 - g.friction * dt);
+      }
+
+      // Check if within pickup radius — magnet pull
+      const dx = this.player.x - g.x;
+      const dy = this.player.y - g.y;
+      const d2 = dx * dx + dy * dy;
+
+      if (d2 < pr2) {
+        // Pull toward player
+        const len = Math.sqrt(d2);
+        if (len > 1) {
+          const pullSpeed = 350;
+          g.x += (dx / len) * pullSpeed * dt;
+          g.y += (dy / len) * pullSpeed * dt;
+        }
+      }
+
+      // Collect if very close
+      if (d2 < 20 * 20) {
+        const levelsGained = this.player.addXp(g.xpValue);
+        if (levelsGained > 0) {
+          this.pendingLevelUps += levelsGained;
+          this.showLevelUpScreen();
+        }
+        g.alive = false;
+        g.visible = false;
+        this.xpGems.splice(i, 1);
+        this.gemPool.release(g);
+      }
+    }
+  }
+
+  // ------- Level Up -------
+  private showLevelUpScreen() {
+    if (this.levelUpScreen || this.pendingLevelUps <= 0) return;
+    this.paused = true;
+    const choices = this.weaponMgr.getLevelUpChoices(3);
+    this.levelUpScreen = new LevelUpScreen(
+      choices,
+      this.app.screen.width,
+      this.app.screen.height,
+      (chosen: WeaponChoice) => this.onWeaponChosen(chosen),
+    );
+    this.hudLayer.addChild(this.levelUpScreen);
+  }
+
+  private onWeaponChosen(choice: WeaponChoice) {
+    this.weaponMgr.addWeapon(choice.type);
+    // Clean up screen
+    if (this.levelUpScreen) {
+      this.hudLayer.removeChild(this.levelUpScreen);
+      this.levelUpScreen.destroy({ children: true });
+      this.levelUpScreen = null;
+    }
+    this.pendingLevelUps--;
+    if (this.pendingLevelUps > 0) {
+      this.showLevelUpScreen();
+    } else {
+      this.paused = false;
+    }
+  }
+
+  // ------- Flame Zones -------
+  private updateFlameZones(dt: number) {
+    for (let i = this.flameZones.length - 1; i >= 0; i--) {
+      const f = this.flameZones[i];
+      f.lifetime += dt;
+      f.alpha = 1 - f.lifetime / f.maxLifetime * 0.5;
+      f.tickTimer -= dt;
+
+      // Damage enemies on tick
+      if (f.tickTimer <= 0) {
+        f.tickTimer = f.tickInterval;
+        for (const e of this.enemies) {
+          if (!e.alive) continue;
+          if (circleHit(f.x, f.y, f.radius, e.x, e.y, e.radius)) {
+            e.hp -= f.damage;
+            e.flashDamage();
+            this.spawnDmgNumber(f.damage, e.x, e.y - 15);
+            if (e.hp <= 0) {
+              const idx = this.enemies.indexOf(e);
+              if (idx >= 0) this.killEnemy(idx);
+            }
+          }
+        }
+      }
+
+      if (f.lifetime >= f.maxLifetime) {
+        f.alive = false;
+        f.visible = false;
+        this.flameZones.splice(i, 1);
+        this.flamePool.release(f);
+      }
+    }
+  }
+
+  // ------- Lightning Effects -------
+  private updateLightningEffects(dt: number) {
+    for (let i = this.lightningEffects.length - 1; i >= 0; i--) {
+      const l = this.lightningEffects[i];
+      l.lifetime += dt;
+      l.alpha = 1 - l.lifetime / l.maxLifetime;
+      if (l.lifetime >= l.maxLifetime) {
+        l.alive = false;
+        l.visible = false;
+        this.lightningEffects.splice(i, 1);
+        this.lightningPool.release(l);
+      }
+    }
   }
 
   // ------- Damage numbers -------
@@ -392,10 +563,36 @@ export class Game {
     }
     this.dmgNumbers.length = 0;
 
+    for (const g of this.xpGems) {
+      g.visible = false;
+      this.gemPool.release(g);
+    }
+    this.xpGems.length = 0;
+
+    for (const f of this.flameZones) {
+      f.visible = false;
+      this.flamePool.release(f);
+    }
+    this.flameZones.length = 0;
+
+    for (const l of this.lightningEffects) {
+      l.visible = false;
+      this.lightningPool.release(l);
+    }
+    this.lightningEffects.length = 0;
+
+    // Reset weapons and re-add default
+    this.weaponMgr.reset();
+    this.weaponMgr.addWeapon(WeaponType.PlasmaBolt);
+
     // Reset player
+    this.player.maxHp = 100;
     this.player.hp = this.player.maxHp;
     this.player.invulnTimer = 0;
     this.player.attackTimer = 0;
+    this.player.pickupRadius = 60;
+    this.player.xp = 0;
+    this.player.level = 1;
     this.player.alpha = 1;
     this.player.position.set(0, 0);
     this.player.drawHpBar();
@@ -406,8 +603,15 @@ export class Game {
     this.spawnTimer = 0;
     this.gameOver = false;
     this.restartQueued = false;
+    this.paused = false;
+    this.pendingLevelUps = 0;
 
-    // Remove game over screen
+    // Remove overlays
+    if (this.levelUpScreen) {
+      this.hudLayer.removeChild(this.levelUpScreen);
+      this.levelUpScreen.destroy({ children: true });
+      this.levelUpScreen = null;
+    }
     if (this.gameOverScreen) {
       this.hudLayer.removeChild(this.gameOverScreen);
       this.gameOverScreen.destroy({ children: true });
