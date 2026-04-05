@@ -2,7 +2,7 @@ import { Application, Container } from "pixi.js";
 import { Keyboard } from "./input";
 import { Pool } from "./pool";
 import { Player, Enemy, Projectile, DamageNumber, XpGem } from "./entities";
-import { HUD, RunSummaryScreen, LevelUpScreen, WeaponChoice, UpgradeShopScreen, CharacterSelectScreen } from "./hud";
+import { HUD, RunSummaryScreen, LevelUpScreen, WeaponChoice, UpgradeShopScreen, CharacterSelectScreen, LeaderboardScreen } from "./hud";
 import { WeaponManager, WeaponType, FlameZone, LightningEffect } from "./weapons";
 import { SaveManager } from "./save";
 import { goldPerKill, getUpgradeBonus, UpgradeId } from "./upgrades";
@@ -65,6 +65,7 @@ export class Game {
   private levelUpScreen: LevelUpScreen | null = null;
   private upgradeShopScreen: UpgradeShopScreen | null = null;
   private charSelectScreen: CharacterSelectScreen | null = null;
+  private leaderboardScreen: LeaderboardScreen | null = null;
 
   // Persistence
   private saveMgr: SaveManager;
@@ -586,7 +587,8 @@ export class Game {
 
     // Save run to persistent storage
     const weaponNames = this.weaponMgr.weapons.map(w => w.type as string);
-    this.saveMgr.recordRun(this.kills, this.elapsed, this.player.level, weaponNames, this.runGold);
+    const isNewHighScore = this.saveMgr.recordRun(this.kills, this.elapsed, this.player.level, weaponNames, this.runGold, this.activeCharId);
+    const score = Math.round(this.kills * (this.elapsed / 60));
 
     const save = this.saveMgr.save;
     const ownedWeapons = this.weaponMgr.weapons.map(w => ({ type: w.type, level: w.level }));
@@ -598,6 +600,8 @@ export class Game {
         weapons: ownedWeapons,
         goldEarned: this.runGold,
         totalGold: save.gold,
+        score,
+        isNewHighScore,
       },
       this.app.screen.width,
       this.app.screen.height,
@@ -719,5 +723,103 @@ export class Game {
       this.upgradeShopScreen.destroy({ children: true });
       this.upgradeShopScreen = null;
     }
+    if (this.leaderboardScreen) {
+      this.hudLayer.removeChild(this.leaderboardScreen);
+      this.leaderboardScreen.destroy({ children: true });
+      this.leaderboardScreen = null;
+    }
+  }
+
+  // ------- Character Select (main menu) -------
+  private showCharacterSelect() {
+    this.waitingForCharSelect = true;
+    this.restart();
+
+    this.charSelectScreen = new CharacterSelectScreen(
+      this.saveMgr,
+      this.app.screen.width,
+      this.app.screen.height,
+      (charId: CharacterId) => this.onCharacterSelected(charId),
+      () => this.showLeaderboard(),
+    );
+    this.hudLayer.addChild(this.charSelectScreen);
+  }
+
+  private onCharacterSelected(charId: CharacterId) {
+    this.activeCharId = charId;
+    const charDef = CHARACTER_DEFS[charId];
+
+    // Apply character stats
+    this.player.maxHp = charDef.baseHp + getUpgradeBonus(this.saveMgr, UpgradeId.MaxHealth);
+    this.player.hp = this.player.maxHp;
+    this.player.speed = charDef.baseSpeed * (1 + getUpgradeBonus(this.saveMgr, UpgradeId.MoveSpeed) / 100);
+    this.player.drawHpBar();
+
+    // Set starting weapon
+    this.weaponMgr.reset();
+    this.weaponMgr.addWeapon(charDef.startingWeapon);
+
+    // Reset passives
+    this.lastDamageTime = 0;
+    this.shieldHp = 0;
+    this.shieldActive = false;
+
+    // Close char select
+    if (this.charSelectScreen) {
+      this.hudLayer.removeChild(this.charSelectScreen);
+      this.charSelectScreen.destroy({ children: true });
+      this.charSelectScreen = null;
+    }
+    this.waitingForCharSelect = false;
+  }
+
+  // ------- Passives -------
+  private updatePassives(dt: number) {
+    // Nova: Adaptive Shield — after 4s without damage, gain shield = 10% maxHp
+    if (this.activeCharId === CharacterId.Nova) {
+      const timeSinceDmg = this.elapsed - this.lastDamageTime;
+      if (timeSinceDmg >= 4 && !this.shieldActive) {
+        this.shieldActive = true;
+        this.shieldHp = Math.round(this.player.maxHp * 0.1);
+      }
+    }
+
+    // Kira: Adrenaline — below 50% HP: +25% dmg/+20% speed; below 25%: doubled
+    if (this.activeCharId === CharacterId.Kira) {
+      const hpRatio = this.player.hp / this.player.maxHp;
+      const charDef = CHARACTER_DEFS[CharacterId.Kira];
+      const baseSpeed = charDef.baseSpeed * (1 + getUpgradeBonus(this.saveMgr, UpgradeId.MoveSpeed) / 100);
+      if (hpRatio <= 0.25) {
+        this.player.speed = baseSpeed * 1.4;
+      } else if (hpRatio <= 0.5) {
+        this.player.speed = baseSpeed * 1.2;
+      } else {
+        this.player.speed = baseSpeed;
+      }
+    }
+
+    // Aegis: Thorns — handled in checkEnemyPlayerCollisions
+  }
+
+  // ------- Leaderboard -------
+  private showLeaderboard() {
+    if (this.leaderboardScreen) return;
+    if (this.charSelectScreen) this.charSelectScreen.visible = false;
+    this.leaderboardScreen = new LeaderboardScreen(
+      this.saveMgr,
+      this.app.screen.width,
+      this.app.screen.height,
+      () => this.closeLeaderboard(),
+    );
+    this.hudLayer.addChild(this.leaderboardScreen);
+  }
+
+  private closeLeaderboard() {
+    if (this.leaderboardScreen) {
+      this.hudLayer.removeChild(this.leaderboardScreen);
+      this.leaderboardScreen.destroy({ children: true });
+      this.leaderboardScreen = null;
+    }
+    if (this.charSelectScreen) this.charSelectScreen.visible = true;
   }
 }

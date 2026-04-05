@@ -297,6 +297,8 @@ export interface RunSummaryData {
   level: number;
   weapons: { type: WeaponType; level: number }[];
   goldEarned: number;
+  score: number;
+  isNewHighScore: boolean;
   totalGold: number;
 }
 

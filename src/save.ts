@@ -15,6 +15,16 @@ export interface RunRecord {
   weapons: string[]; // weapon type names held at end of run
   goldEarned: number;
   date: number; // Date.now()
+  score: number; // kills × (timeSurvived / 60)
+  character: string; // character id used for this run
+}
+
+export interface LeaderboardEntry {
+  score: number;
+  kills: number;
+  timeSurvived: number;
+  character: string;
+  date: number;
 }
 
 export interface SaveData {
@@ -25,9 +35,11 @@ export interface SaveData {
   unlockedCharacters: string[]; // character ids
   selectedCharacter: string; // currently selected character id
   runHistory: RunRecord[];
+  leaderboard: LeaderboardEntry[]; // top 10 runs by score
   bestKills: number;
   bestTime: number; // seconds
   bestLevel: number;
+  bestScore: number;
   totalRuns: number;
 }
 
@@ -40,9 +52,11 @@ function createFreshSave(): SaveData {
     unlockedCharacters: ["nova"],
     selectedCharacter: "nova",
     runHistory: [],
+    leaderboard: [],
     bestKills: 0,
     bestTime: 0,
     bestLevel: 0,
+    bestScore: 0,
     totalRuns: 0,
   };
 }
@@ -62,9 +76,11 @@ function migrate(raw: Record<string, unknown>): SaveData {
     raw.unlockedCharacters ??= ["nova"];
     raw.selectedCharacter ??= "nova";
     raw.runHistory ??= [];
+    raw.leaderboard ??= [];
     raw.bestKills ??= 0;
     raw.bestTime ??= 0;
     raw.bestLevel ??= 0;
+    raw.bestScore ??= 0;
     raw.totalRuns ??= 0;
   }
 
@@ -86,8 +102,9 @@ export class SaveManager {
     return this.data;
   }
 
-  /** Record a completed run and persist. */
-  recordRun(kills: number, timeSurvived: number, level: number, weapons: string[], goldEarned: number): void {
+  /** Record a completed run and persist. Returns true if this run is a new high score. */
+  recordRun(kills: number, timeSurvived: number, level: number, weapons: string[], goldEarned: number, character: string): boolean {
+    const score = Math.round(kills * (timeSurvived / 60));
     const record: RunRecord = {
       kills,
       timeSurvived,
@@ -95,10 +112,11 @@ export class SaveManager {
       weapons,
       goldEarned,
       date: Date.now(),
+      score,
+      character,
     };
 
     this.data.runHistory.push(record);
-    // Cap history at 50 entries
     if (this.data.runHistory.length > 50) {
       this.data.runHistory = this.data.runHistory.slice(-50);
     }
@@ -109,6 +127,30 @@ export class SaveManager {
     if (timeSurvived > this.data.bestTime) this.data.bestTime = timeSurvived;
     if (level > this.data.bestLevel) this.data.bestLevel = level;
 
+    const isNewHighScore = score > this.data.bestScore;
+    if (isNewHighScore) this.data.bestScore = score;
+
+    // Update leaderboard (top 10 by score)
+    const entry: LeaderboardEntry = { score, kills, timeSurvived, character, date: record.date };
+    this.data.leaderboard.push(entry);
+    this.data.leaderboard.sort((a, b) => b.score - a.score);
+    if (this.data.leaderboard.length > 10) {
+      this.data.leaderboard = this.data.leaderboard.slice(0, 10);
+    }
+
+    this.persist();
+    return isNewHighScore;
+  }
+
+  /** Get the leaderboard (top 10 runs). */
+  getLeaderboard(): readonly LeaderboardEntry[] {
+    return this.data.leaderboard;
+  }
+
+  /** Reset leaderboard data only. */
+  resetLeaderboard(): void {
+    this.data.leaderboard = [];
+    this.data.bestScore = 0;
     this.persist();
   }
 

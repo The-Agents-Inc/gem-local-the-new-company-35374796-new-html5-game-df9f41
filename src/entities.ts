@@ -38,6 +38,9 @@ export class Player extends Container implements HasHealth {
   xp = 0;
   level = 1;
 
+  // Tick-based flash (replaces setTimeout)
+  flashTimer = 0;
+
   private body: Graphics;
   private hpBar: Graphics;
 
@@ -77,9 +80,16 @@ export class Player extends Container implements HasHealth {
 
   flashDamage() {
     this.body.tint = 0xff0000;
-    setTimeout(() => {
-      this.body.tint = 0xffffff;
-    }, 100);
+    this.flashTimer = 0.1;
+  }
+
+  updateFlash(dt: number) {
+    if (this.flashTimer > 0) {
+      this.flashTimer -= dt;
+      if (this.flashTimer <= 0) {
+        this.body.tint = 0xffffff;
+      }
+    }
   }
 
   /** Returns number of levels gained */
@@ -115,6 +125,9 @@ export class Enemy extends Container implements HasHealth {
   contactTimer = 0;
   alive = true;
 
+  // Tick-based flash (replaces setTimeout)
+  flashTimer = 0;
+
   private body: Graphics;
 
   constructor() {
@@ -132,16 +145,23 @@ export class Enemy extends Container implements HasHealth {
     this.visible = true;
     this.alpha = 1;
     this.contactTimer = 0;
+    this.flashTimer = 0;
     this.speed = 60 + Math.random() * 40;
     this.body.tint = 0xffffff;
   }
 
   flashDamage() {
-    this.body.tint = 0xffffff;
-    setTimeout(() => {
-      if (this.alive) this.body.tint = 0xffffff;
-    }, 80);
     this.body.tint = 0xffff00;
+    this.flashTimer = 0.08;
+  }
+
+  updateFlash(dt: number) {
+    if (this.flashTimer > 0) {
+      this.flashTimer -= dt;
+      if (this.flashTimer <= 0) {
+        this.body.tint = 0xffffff;
+      }
+    }
   }
 }
 
@@ -224,8 +244,12 @@ export class DamageNumber extends Container {
   vy = -60;
   alive = true;
 
+  private gfx: Graphics;
+
   constructor() {
     super();
+    this.gfx = new Graphics();
+    this.addChild(this.gfx);
   }
 
   init(dmg: number, x: number, y: number) {
@@ -235,14 +259,11 @@ export class DamageNumber extends Container {
     this.visible = true;
     this.alpha = 1;
 
-    // Draw number as small circles for digit representation (simple approach)
-    this.removeChildren();
-    const txt = new Graphics();
-    // Simple pip for each 10 damage
+    // Redraw pips on the single reusable Graphics (no removeChildren / new Graphics)
+    this.gfx.clear();
     const pips = Math.max(1, Math.round(dmg / 5));
     for (let i = 0; i < pips; i++) {
-      txt.circle(i * 5 - (pips * 5) / 2, 0, 2).fill({ color: 0xffee55 });
+      this.gfx.circle(i * 5 - (pips * 5) / 2, 0, 2).fill({ color: 0xffee55 });
     }
-    this.addChild(txt);
   }
 }
